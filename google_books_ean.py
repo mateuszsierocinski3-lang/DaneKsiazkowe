@@ -7,17 +7,18 @@ import io
 import random
 
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="Book Scraper Pro", page_icon="📚")
+st.set_page_config(page_title="ISBN Master Pro", page_icon="📚")
 
 CYTATY_HRABIEGO = [
     "Czekać i mieć nadzieję.",
     "Mądrość ludzka zawiera się w tych dwóch słowach: Czekać i mieć nadzieję!",
     "Historia świata to tylko zbiór anegdot, które sobie ludzie opowiadają.",
     "Jestem tym, kim jestem: narzędziem w rękach Boga.",
-    "Litość jest uczuciem, które najbardziej upodabnia człowieka do Boga."
+    "Wszystkie nieszczęścia ludzi płyną z nadziei.",
+    "Trzeba zaznać smaku śmierci, by wiedzieć, jak dobrze jest żyć."
 ]
 
-# --- STYLIZACJA CSS (Animacja i Cytat) ---
+# --- STYLIZACJA CSS ---
 st.markdown("""
 <style>
     .book-container { display: flex; flex-direction: column; align-items: center; padding: 20px; }
@@ -31,85 +32,94 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- LOGIKA NAPRAWCZA EAN ---
-def get_ean_variants(ean):
-    """Naprawia błędy Excela i tworzy listę wariantów do sprawdzenia."""
-    if pd.isna(ean): return []
-    # Usunięcie .0 i formatu naukowego
+# --- FUNKCJE POMOCNICZE ---
+
+def clean_ean_to_string(ean):
+    """Konwertuje EAN na czysty ciąg cyfr, odporny na formaty Excela."""
+    if pd.isna(ean): return ""
     s = str(ean).strip()
-    if 'E' in s.upper() or '.' in s:
-        try: s = "{:.0f}".format(float(ean))
-        except: pass
-    ean_clean = re.sub(r'\D', '', s)
-    if not ean_clean: return []
-    
-    variants = [ean_clean]
-    if len(ean_clean) == 12: variants.append("0" + ean_clean) # Brakujące zero na początku
-    if len(ean_clean) > 10: variants.append(ean_clean[-10:])  # Wersja 10-cyfrowa
-    return list(dict.fromkeys(variants))
-
-# --- POBIERANIE DANYCH ---
-def fetch_all_data(ean_original):
-    variants = get_ean_variants(ean_original)
-    final_data = None
-    
-    # 1. Google Books (Priorytet)
-    for v in variants:
+    # Jeśli jest kropka lub E (format naukowy), przelicz na int
+    if '.' in s or 'E' in s.upper():
         try:
-            res = requests.get(f"https://www.googleapis.com/books/v1/volumes?q=isbn:{v}", timeout=10)
-            if res.status_code == 200 and 'items' in res.json():
-                info = res.json()['items'][0]['volumeInfo']
-                ids = info.get('industryIdentifiers', [])
-                img = info.get('imageLinks', {})
-                
-                final_data = {
-                    "ISBN-13": next((i['identifier'] for i in ids if i['type'] == 'ISBN_13'), "Brak"),
-                    "ISBN-10": next((i['identifier'] for i in ids if i['type'] == 'ISBN_10'), "Brak"),
-                    "Tytuł": info.get('title', "Brak danych"),
-                    "Autor": ", ".join(info.get('authors', [])),
-                    "Współtwórca": "", # Google rzadko to rozdziela
-                    "Wydawca": info.get('publisher', ""),
-                    "Opis": info.get('description', "Brak opisu"),
-                    "Opublikowane": info.get('publishedDate', "Brak"),
-                    "Liczba stron": info.get('pageCount', "Brak"),
-                    "Link do okładki": (img.get('thumbnail') or "").replace("http://", "https://"),
-                    "Źródło": "Google"
+            s = "{:.0f}".format(float(ean))
+        except:
+            pass
+    return re.sub(r'\D', '', s)
+
+def fetch_from_google(ean):
+    """Próbuje znaleźć książkę w Google na dwa sposoby."""
+    if not ean: return None
+    
+    # Próbujemy dwóch typów zapytań
+    search_queries = [f"isbn:{ean}", f"{ean}"]
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
+    
+    for q in search_queries:
+        try:
+            url = f"https://www.googleapis.com/books/v1/volumes?q={q}"
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                data = res.json()
+                if 'items' in data:
+                    vol = data['items'][0]['volumeInfo']
+                    ids = vol.get('industryIdentifiers', [])
+                    i13 = next((i['identifier'] for i in ids if i['type'] == 'ISBN_13'), ean)
+                    i10 = next((i['identifier'] for i in ids if i['type'] == 'ISBN_10'), "Brak")
+                    img = vol.get('imageLinks', {})
+                    cover = img.get('extraLarge') or img.get('large') or img.get('thumbnail') or "Brak okładki"
+                    
+                    return {
+                        "ISBN-13": i13,
+                        "ISBN-10": i10,
+                        "Tytuł": vol.get('title', "Brak danych"),
+                        "Autor": ", ".join(vol.get('authors', ["Brak danych"])),
+                        "Współtwórca": "", 
+                        "Wydawca": vol.get('publisher', "Brak danych"),
+                        "Opis": vol.get('description', "Brak opisu"),
+                        "Opublikowane": vol.get('publishedDate', "Brak"),
+                        "Liczba stron": vol.get('pageCount', "Brak"),
+                        "Link do okładki": cover.replace("http://", "https://") if "http" in cover else cover,
+                        "Źródło": "Google"
+                    }
+        except:
+            continue
+    return None
+
+def fetch_from_bn(ean):
+    """Fallback do Biblioteki Narodowej."""
+    try:
+        url = f"https://data.bn.org.pl/api/institutions/bibs.json?isbnIssn={ean}"
+        res = requests.get(url, timeout=10)
+        if res.status_code == 200:
+            bibs = res.json().get('bibs', [])
+            if bibs:
+                b = bibs[0]
+                return {
+                    "ISBN-13": ean, "ISBN-10": "Brak",
+                    "Tytuł": b.get('title', "Brak danych"),
+                    "Autor": b.get('author', "Brak danych"),
+                    "Współtwórca": "", "Wydawca": b.get('publisher', "Brak danych"),
+                    "Opis": "Brak opisu (BN)", "Opublikowane": b.get('publicationYear', "Brak"),
+                    "Liczba stron": "Brak", "Link do okładki": "Brak okładki", "Źródło": "BN"
                 }
-                break
-        except: continue
+    except: pass
+    return None
 
-    # 2. Fallback: Biblioteka Narodowa (Tylko Wydawca jeśli brak)
-    if not final_data or not final_data.get("Wydawca"):
-        for v in variants:
-            try:
-                bn_res = requests.get(f"https://data.bn.org.pl/api/institutions/bibs.json?isbnIssn={v}", timeout=10)
-                if bn_res.status_code == 200:
-                    bibs = bn_res.json().get('bibs', [])
-                    if bibs:
-                        if not final_data:
-                            final_data = {k: "Nie znaleziono" for k in ["ISBN-13", "ISBN-10", "Tytuł", "Autor", "Współtwórca", "Wydawca", "Opis", "Opublikowane", "Liczba stron", "Link do okładki", "Źródło"]}
-                            final_data["Tytuł"] = bibs[0].get('title', "Nie znaleziono")
-                        final_data["Wydawca"] = bibs[0].get('publisher', "Nie znaleziono")
-                        final_data["Źródło"] = "BN"
-                        break
-            except: continue
+# --- UI STREAMLIT ---
 
-    return final_data
-
-# --- INTERFEJS ---
-st.title("📚 ISBN Multibaza Scraper")
-uploaded_file = st.file_uploader("Wgraj plik Excel", type=["xlsx"])
+st.title("📚 ISBN Multibaza - Weryfikator")
+uploaded_file = st.file_uploader("Wgraj plik z kolumną EAN", type=["xlsx"])
 
 if uploaded_file:
-    df_input = pd.read_excel(uploaded_file)
-    col_name = st.selectbox("Wybierz kolumnę EAN:", df_input.columns)
+    df_in = pd.read_excel(uploaded_file)
+    ean_col = st.selectbox("Wybierz kolumnę z numerami:", df_in.columns)
     
-    if st.button("🚀 Przetwarzaj"):
+    if st.button("🚀 Rozpocznij sprawdzanie"):
         results = []
         progress = st.progress(0)
         status = st.empty()
         
-        # Animacja i cytat
+        # Animacja + Cytat
         anim_placeholder = st.empty()
         anim_placeholder.markdown(f"""
             <div class="book-container">
@@ -118,32 +128,37 @@ if uploaded_file:
             </div>
         """, unsafe_allow_html=True)
 
-        for i, row in df_input.iterrows():
-            ean = row[col_name]
-            status.text(f"Przetwarzam: {ean} ({i+1}/{len(df_input)})")
+        for i, row in df_in.iterrows():
+            ean_raw = clean_ean_to_string(row[ean_col])
+            status.text(f"Przetwarzam: {ean_raw}")
             
-            data = fetch_all_data(ean)
+            # Próba 1: Google
+            data = fetch_from_google(ean_raw)
             
-            # Mapowanie do struktury zgodnej z Twoim plikiem
-            entry = {"EAN z pliku": ean}
-            columns_order = ["ISBN-13", "ISBN-10", "Tytuł", "Autor", "Współtwórca", "Wydawca", "Opis", "Opublikowane", "Liczba stron", "Link do okładki", "Źródło"]
+            # Próba 2: BN (jeśli Google zawiedzie)
+            if not data:
+                data = fetch_from_bn(ean_raw)
             
-            for col in columns_order:
-                entry[col] = data.get(col, "Nie znaleziono") if data else "Nie znaleziono"
+            # Budowanie wiersza zgodnie ze schematem
+            entry = {"EAN z pliku": ean_raw}
+            cols = ["ISBN-13", "ISBN-10", "Tytuł", "Autor", "Współtwórca", "Wydawca", "Opis", "Opublikowane", "Liczba stron", "Link do okładki", "Źródło"]
+            
+            for c in cols:
+                entry[c] = data.get(c, "Nie znaleziono") if data else "Nie znaleziono"
             
             results.append(entry)
-            progress.progress((i + 1) / len(df_input))
-            time.sleep(0.1)
+            progress.progress((i + 1) / len(df_in))
+            time.sleep(0.1) # Delikatne opóźnienie dla stabilności API
 
         anim_placeholder.empty()
-        status.success("✅ Gotowe!")
+        status.success("✅ Przetwarzanie zakończone!")
         
-        df_final = pd.DataFrame(results)
+        df_res = pd.DataFrame(results)
         
-        # Export
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-            df_final.to_excel(writer, index=False)
+        # Export do Excela
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            df_res.to_excel(writer, index=False)
         
-        st.download_button("📥 Pobierz wynikowy Excel", buf.getvalue(), "wynik_multibaza.xlsx", "application/vnd.ms-excel")
-        st.dataframe(df_final)
+        st.download_button("📥 Pobierz wynikowy Excel", output.getvalue(), "wynik_isbn.xlsx")
+        st.dataframe(df_res)
