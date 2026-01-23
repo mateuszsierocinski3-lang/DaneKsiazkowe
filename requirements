@@ -2,3 +2,6 @@ streamlit
 pandas
 requests
 openpyxl
+time
+re
+io
