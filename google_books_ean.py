@@ -7,7 +7,7 @@ import io
 import random
 
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="Open Library & Sunnyvale Scraper", page_icon="🥃")
+st.set_page_config(page_title="Open Library Sunnyvale Edition", page_icon="🥃")
 
 # --- CYTATY Z CHŁOPAKÓW Z BARAKÓW ---
 CYTATY_CHLOPAKI = [
@@ -15,31 +15,35 @@ CYTATY_CHLOPAKI = [
     "„Miałem wtedy z dziesięć lat i miałem tylko jedno marzenie: być wozem asenizacyjnym.” — Ricky",
     "„Julian, on pije wodę z psem! To jest obrzydliwe!” — Bubbles",
     "„Czujesz to? To gówniany wiatr wieje.” — Jim Lahey",
-    "„Jeden gram haszyszu to jeden gram haszyszu. Nie możesz powiedzieć, że to nie jest gram haszyszu.” — Ricky",
-    "„Przyjaciele to ludzie, którzy pomagają ci kraść benzynę, kiedy nie masz na nią pieniędzy.” — Ricky",
-    "„Zasady są proste: nie jesz moich pepperoni i nie pijesz mojego soku.” — Ricky",
-    "„Życie nie polega tylko na ćpaniu i piciu, Julian. Trzeba jeszcze kraść.” — Ricky"
+    "„Jeden gram haszyszu to jeden gram haszyszu.” — Ricky",
+    "„Przyjaciele to ludzie, którzy pomagają ci kraść benzynę.” — Ricky",
+    "„Zasady są proste: nie jesz moich pepperoni i nie pijesz mojego soku.” — Ricky"
 ]
 
 # --- STYLE CSS ---
 st.markdown("""
 <style>
-    .book-container { display: flex; flex-direction: column; align-items: center; padding: 20px; }
-    .book { width: 60px; height: 45px; position: relative; perspective: 150px; margin-bottom: 20px; }
-    .page { width: 30px; height: 45px; background: #e0e0e0; border: 2px solid #333; position: absolute; right: 0; transform-origin: left; animation: flip 1.2s infinite linear; border-radius: 0 2px 2px 0; }
-    @keyframes flip { 0% { transform: rotateY(0deg); } 100% { transform: rotateY(-180deg); } }
-    .quote-box { text-align: center; font-family: 'Courier New', Courier, monospace; font-weight: bold; color: #1a1a1a; background: #fdfd96; padding: 20px; border-radius: 10px; border: 3px solid #333; box-shadow: 5px 5px 0px #000; max-width: 600px; }
+    .main-container { display: flex; flex-direction: column; align-items: center; padding: 20px; }
+    .quote-box { 
+        text-align: center; 
+        font-family: 'Courier New', monospace; 
+        font-weight: bold; 
+        color: #1a1a1a; 
+        background: #fdfd96; 
+        padding: 20px; 
+        border-radius: 10px; 
+        border: 3px solid #333; 
+        box-shadow: 8px 8px 0px #000;
+        margin: 20px 0;
+    }
+    .stProgress > div > div > div > div { background-color: #333; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNKCJE POMOCNICZE ---
-
-def clean_html(text):
-    if not text: return ""
-    clean = re.compile('<.*?>')
-    return re.sub(clean, '', str(text))
+# --- LOGIKA WYSZUKIWANIA ---
 
 def get_ean_variants(ean_raw):
+    """Generuje unikalne warianty numeru do sprawdzenia."""
     s = re.sub(r'\D', '', str(ean_raw))
     if not s: return []
     v = [s]
@@ -48,85 +52,92 @@ def get_ean_variants(ean_raw):
     if len(s) >= 10: v.append(s[-10:])
     return list(dict.fromkeys(v))
 
-def fetch_open_library(variants):
-    """Odpytuje wyłącznie Open Library."""
-    for e in variants:
+def fetch_open_library_read_api(variants):
+    """Wykorzystuje Read API (Brief Viewer) Open Library."""
+    for isbn in variants:
         try:
-            url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{e}&format=json&jscmd=data"
+            # Używamy sugerowanego przez Ciebie endpointu Read API
+            url = f"https://openlibrary.org/api/volumes/brief/isbn/{isbn}.json"
             response = requests.get(url, timeout=10)
+            
             if response.status_code == 200:
                 data = response.json()
-                key = f"ISBN:{e}"
-                if key in data:
-                    book = data[key]
+                if data and 'records' in data:
+                    # Pobieramy pierwszy dostępny rekord
+                    first_key = list(data['records'].keys())[0]
+                    record = data['records'][first_key]
+                    
+                    # Wyciągamy dane podstawowe z rekordu
                     return {
-                        "Tytuł": book.get('title', "Brak tytułu"),
-                        "Autor": ", ".join([a['name'] for a in book.get('authors', [])]) if 'authors' in book else "Nieznany",
-                        "Wydawca": ", ".join([p['name'] for p in book.get('publishers', [])]) if 'publishers' in book else "Brak danych",
-                        "Opis": clean_html(book.get('notes', "Brak opisu w Open Library")),
-                        "Opublikowane": book.get('publish_date', "Brak daty"),
-                        "Link do okładki": book.get('cover', {}).get('large', ""),
-                        "Źródło": "Open Library"
+                        "Tytuł": record.get('data', {}).get('title', "Brak tytułu"),
+                        "Autor": ", ".join([a['name'] for a in record.get('data', {}).get('authors', [])]) if record.get('data', {}).get('authors') else "Nieznany",
+                        "Wydawca": record.get('data', {}).get('publishers', [{}])[0].get('name', "Brak danych"),
+                        "Opublikowane": record.get('data', {}).get('publish_date', "Brak daty"),
+                        "Link OL": record.get('recordURL', ""),
+                        "Źródło": "Open Library Read API"
                     }
         except:
             continue
     return None
 
-# --- UI APLIKACJI ---
+# --- APLIKACJA ---
 
-st.title("🥃 Sunnyvale ISBN Scanner (Open Library Edition)")
-st.markdown("*„Dobra, Julian, sprawdzamy te książki, ale potem idziemy na cheeseburgery.”*")
+st.title("🥃 Sunnyvale Book Tracker")
+st.markdown("*„Dobra, Cory, Trevor, dawajcie te numery ISBN, tylko szybko!”*")
 
-file = st.file_uploader("Wgraj plik Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Wgraj arkusz z baraku (Excel)", type=["xlsx"])
 
-if file:
-    df_in = pd.read_excel(file)
-    col = st.selectbox("Wybierz kolumnę z ISBN:", df_in.columns)
+if uploaded_file:
+    df_in = pd.read_excel(uploaded_file)
+    column = st.selectbox("Wybierz kolumnę z ISBN:", df_in.columns)
     
-    if st.button("🚀 Odpal silnik (Cory, Trevor, fajki już!)"):
-        final_results = []
-        bar = st.progress(0)
+    if st.button("🚀 Przeszukaj baraki"):
+        final_data = []
+        progress = st.progress(0)
         status = st.empty()
-        anim = st.empty()
+        quote_area = st.empty()
         
-        # Animacja i cytat z Baraków
-        wybrany_cytat = random.choice(CYTATY_CHLOPAKI)
-        anim.markdown(f"""
-            <div class="book-container">
-                <div class="book"><div class="page"></div></div>
-                <div class="quote-box">{wybrany_cytat}</div>
-            </div>
-        """, unsafe_allow_html=True)
+        # Losowy cytat na start
+        quote_area.markdown(f'<div class="quote-box">{random.choice(CYTATY_CHLOPAKI)}</div>', unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
-            isbn_raw = row[col]
-            status.text(f"Przeszukuję baraki dla ISBN: {isbn_raw}...")
+            raw_val = row[column]
+            status.text(f"Sprawdzam towar: {raw_val}...")
             
-            # Resetowanie danych - to zapobiega powielaniu Julesa Verne'a!
-            vars_to_check = get_ean_variants(isbn_raw)
-            book_info = fetch_open_library(vars_to_check)
+            # Kluczowe: Szukamy wariantów i pobieramy dane
+            # Jeśli funkcja nie znajdzie nic, zwróci None, co wyczyści wynik dla tego wiersza
+            variants = get_ean_variants(raw_val)
+            book_info = fetch_open_library_read_api(variants)
             
-            # Budowa rekordu - jeśli nic nie znajdzie, wpisze "Brak w baraku"
-            record = {"EAN z pliku": isbn_raw}
-            headers = ["Tytuł", "Autor", "Wydawca", "Opis", "Opublikowane", "Link do okładki", "Źródło"]
+            # Budowa czystego rekordu dla każdego wiersza
+            entry = {"EAN wejściowy": raw_val}
+            fields = ["Tytuł", "Autor", "Wydawca", "Opublikowane", "Link OL", "Źródło"]
             
-            for h in headers:
-                if book_info and h in book_info:
-                    record[h] = book_info[h]
+            for f in fields:
+                if book_info and f in book_info:
+                    entry[f] = book_info[f]
                 else:
-                    record[h] = "Brak w baraku"
+                    entry[f] = "Brak w baraku"
             
-            final_results.append(record)
-            bar.progress((i + 1) / len(df_in))
-            time.sleep(0.2) # Open Library jest w porządku, nie trzeba długo czekać
+            final_data.append(entry)
+            progress.progress((i + 1) / len(df_in))
+            
+            # Małe opóźnienie dla stabilności
+            time.sleep(0.1)
 
-        anim.empty()
-        status.success("✅ Gotowe! Wszystkie książki przemycone do Excela.")
+        status.success("✅ Skończone. Julian, bierz drina, mamy to.")
+        quote_area.empty()
         
-        df_res = pd.DataFrame(final_results)
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+        # Generowanie pliku wynikowego
+        df_res = pd.DataFrame(final_data)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
             df_res.to_excel(writer, index=False)
         
-        st.download_button("📥 Pobierz wyniki z baraków", buf.getvalue(), "chlopaki_z_barakow_results.xlsx")
+        st.download_button(
+            label="📥 Pobierz wyniki przemytu",
+            data=buffer.getvalue(),
+            file_name="wyniki_sunnyvale_ol.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
         st.dataframe(df_res)
