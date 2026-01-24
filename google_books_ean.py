@@ -22,13 +22,12 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- POPRAWIONA LOGIKA POBIERANIA ---
+# --- POPRAWIONA LOGIKA POBIERANIA (BEZ PODTYTUŁU + FIX OKŁADKI) ---
 
-def fetch_book_data_v2(isbn):
+def fetch_book_data_v3(isbn):
     isbn_clean = re.sub(r'\D', '', str(isbn))
     if not isbn_clean: return None
     
-    # Próbujemy pobrać dane najszerszym możliwym zapytaniem
     url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn_clean}&format=json&jscmd=details"
     
     try:
@@ -37,21 +36,34 @@ def fetch_book_data_v2(isbn):
             res = r.json()
             key = f"ISBN:{isbn_clean}"
             if key in res:
-                # Wyciągamy obie sekcje
                 d_main = res[key].get('data', {})
                 d_details = res[key].get('details', {})
                 
-                # Inteligentne łączenie: bierzemy z 'data', a jeśli puste - z 'details'
+                # 1. Tytuł (zawsze bierzemy główny)
                 title = d_main.get('title') or d_details.get('title')
                 
-                # Autorzy często są w różnych miejscach lub formatach
+                # 2. Autorzy
                 authors_list = d_main.get('authors') or d_details.get('authors')
                 authors = "Nieznany"
                 if authors_list:
                     authors = ", ".join([a.get('name', 'Nieznany') for a in authors_list])
 
-                # Tematy, Miejsca, Czasy - Open Library często ma je w 'details' jako zwykłe listy stringów
-                def get_list_or_dicts(field_name):
+                # 3. Logika okładki (sprawdzamy 3 miejsca)
+                cover_url = "Brak okładki"
+                # Miejsce A: Główny obiekt thumbnail_url
+                if res[key].get('thumbnail_url'):
+                    cover_url = res[key].get('thumbnail_url').replace("-S.jpg", "-L.jpg")
+                # Miejsce B: Obiekt 'cover' w data
+                elif d_main.get('cover', {}).get('large'):
+                    cover_url = d_main.get('cover', {}).get('large')
+                # Miejsce C: Lista 'covers' w details (ID obrazka)
+                elif d_details.get('covers'):
+                    cover_id = d_details.get('covers')[0]
+                    if cover_id and cover_id != -1:
+                        cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+
+                # Funkcja pomocnicza do list
+                def get_clean_list(field_name):
                     data = d_main.get(field_name) or d_details.get(field_name) or []
                     if not data: return ""
                     if isinstance(data[0], dict):
@@ -60,24 +72,23 @@ def fetch_book_data_v2(isbn):
 
                 return {
                     "Tytuł": title,
-                    "Podtytuł": d_main.get('subtitle') or d_details.get('subtitle', ""),
                     "Autorzy": authors,
-                    "Wydawcy": get_list_or_dicts('publishers'),
-                    "Miejsca wydania": get_list_or_dicts('publish_places') or get_list_or_dicts('publish_place'),
+                    "Wydawcy": get_clean_list('publishers'),
+                    "Miejsca wydania": get_clean_list('publish_places') or get_clean_list('publish_place'),
                     "Kraj wydania": d_details.get('publish_country', ""),
                     "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date'),
                     "Liczba stron": d_main.get('number_of_pages') or d_details.get('number_of_pages'),
                     "Opis/Notatki": str(d_main.get('notes', d_details.get('notes', ""))),
-                    "Tematy (Subjects)": get_list_or_dicts('subjects'),
-                    "Miejsca (Subject Places)": get_list_or_dicts('subject_place') or get_list_or_dicts('subject_places'),
-                    "Czasy (Subject Times)": get_list_or_dicts('subject_time') or get_list_or_dicts('subject_times'),
+                    "Tematy (Subjects)": get_clean_list('subjects'),
+                    "Miejsca (Subject Places)": get_clean_list('subject_place') or get_clean_list('subject_places'),
+                    "Czasy (Subject Times)": get_clean_list('subject_time') or get_clean_list('subject_times'),
                     "Języki": ", ".join([l.get('key', '').split('/')[-1] for l in d_details.get('languages', [])]),
                     "Klasyfikacja LC": ", ".join(d_details.get('lc_classifications', [])),
                     "ISBN-10": ", ".join(d_details.get('isbn_10', [])),
                     "LCCN": ", ".join(d_details.get('lccn', [])),
                     "OCLC": ", ".join(d_details.get('oclc_numbers', [])),
-                    "Link do okładki (L)": d_main.get('cover', {}).get('large', ""),
-                    "Źródło": "OL Deep v2"
+                    "Link do okładki (L)": cover_url,
+                    "Źródło": "Open Library Deep Fix"
                 }
     except:
         pass
@@ -85,27 +96,31 @@ def fetch_book_data_v2(isbn):
 
 # --- UI ---
 
-st.title("🥃 Sunnyvale Deep Scan FIX")
-st.markdown("Poprawiona wersja wyciągająca dane ukryte głęboko w strukturze JSON.")
+st.title("🥃 Sunnyvale Deep Scan (No Subtitle + Cover Fix)")
+st.markdown("Skrypt zoptymalizowany pod kątem wyciągania zdjęć i pomijania zbędnych podtytułów.")
 
 file = st.file_uploader("Wgraj Excel", type=["xlsx"])
 if file:
     df_in = pd.read_excel(file)
-    col = st.selectbox("Kolumna ISBN:", df_in.columns)
+    col = st.selectbox("Wybierz kolumnę z ISBN:", df_in.columns)
     
     if st.button("🚀 Start"):
         results = []
         bar = st.progress(0)
-        quote = st.empty()
-        quote.markdown(f'<div class="quote-box">{random.choice(CYTATY_CHLOPAKI)}</div>', unsafe_allow_html=True)
+        status = st.empty()
+        
+        # Cytat
+        st.markdown(f'<div class="quote-box">{random.choice(CYTATY_CHLOPAKI)}</div>', unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
             isbn = row[col]
-            data = fetch_book_data_v2(isbn)
+            status.text(f"Sprawdzam: {isbn}...")
+            
+            data = fetch_book_data_v3(isbn)
             
             res_row = {"EAN wejściowy": isbn}
             headers = [
-                "Tytuł", "Podtytuł", "Autorzy", "Wydawcy", "Miejsca wydania", 
+                "Tytuł", "Autorzy", "Wydawcy", "Miejsca wydania", 
                 "Kraj wydania", "Data publikacji", "Liczba stron", 
                 "Opis/Notatki", "Tematy (Subjects)", "Miejsca (Subject Places)", 
                 "Czasy (Subject Times)", "Języki", "Klasyfikacja LC", "ISBN-10", 
@@ -113,7 +128,10 @@ if file:
             ]
             
             for h in headers:
-                res_row[h] = data.get(h, "Brak") if data else "Nie znaleziono"
+                if data and h in data:
+                    res_row[h] = data[h]
+                else:
+                    res_row[h] = "Brak danych"
             
             results.append(res_row)
             bar.progress((i + 1) / len(df_in))
@@ -123,5 +141,5 @@ if file:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
             df_res.to_excel(writer, index=False)
-        st.download_button("📥 Pobierz poprawione dane", buf.getvalue(), "naprawione_wyniki.xlsx")
+        st.download_button("📥 Pobierz finalne wyniki", buf.getvalue(), "sunnyvale_results_final.xlsx")
         st.dataframe(df_res)
