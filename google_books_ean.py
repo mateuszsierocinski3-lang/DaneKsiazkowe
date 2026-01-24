@@ -7,34 +7,40 @@ import io
 import random
 
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="ISBN Master Pro", page_icon="📚")
+st.set_page_config(page_title="Open Library & Sunnyvale Scraper", page_icon="🥃")
 
-CYTATY_HRABIEGO = [
-    "„Czekać i mieć nadzieję.” — Hrabia Monte Christo",
-    "„Mądrość ludzka zawiera się w tych dwóch słowach: Czekać i mieć nadzieję!” — Hrabia Monte Christo",
-    "„Historia świata to tylko zbiór anegdot, które sobie ludzie opowiadają.” — Hrabia Monte Christo",
-    "„Trzeba zaznać smaku śmierci, by wiedzieć, jak dobrze jest żyć.” — Hrabia Monte Christo"
+# --- CYTATY Z CHŁOPAKÓW Z BARAKÓW ---
+CYTATY_CHLOPAKI = [
+    "„To nie jest żadne rocket appliances.” — Ricky",
+    "„Miałem wtedy z dziesięć lat i miałem tylko jedno marzenie: być wozem asenizacyjnym.” — Ricky",
+    "„Julian, on pije wodę z psem! To jest obrzydliwe!” — Bubbles",
+    "„Czujesz to? To gówniany wiatr wieje.” — Jim Lahey",
+    "„Jeden gram haszyszu to jeden gram haszyszu. Nie możesz powiedzieć, że to nie jest gram haszyszu.” — Ricky",
+    "„Przyjaciele to ludzie, którzy pomagają ci kraść benzynę, kiedy nie masz na nią pieniędzy.” — Ricky",
+    "„Zasady są proste: nie jesz moich pepperoni i nie pijesz mojego soku.” — Ricky",
+    "„Życie nie polega tylko na ćpaniu i piciu, Julian. Trzeba jeszcze kraść.” — Ricky"
 ]
 
-# --- STYLE ---
+# --- STYLE CSS ---
 st.markdown("""
 <style>
     .book-container { display: flex; flex-direction: column; align-items: center; padding: 20px; }
     .book { width: 60px; height: 45px; position: relative; perspective: 150px; margin-bottom: 20px; }
-    .page { width: 30px; height: 45px; background: white; border: 2px solid #333; position: absolute; right: 0; transform-origin: left; animation: flip 1.2s infinite linear; border-radius: 0 2px 2px 0; }
+    .page { width: 30px; height: 45px; background: #e0e0e0; border: 2px solid #333; position: absolute; right: 0; transform-origin: left; animation: flip 1.2s infinite linear; border-radius: 0 2px 2px 0; }
     @keyframes flip { 0% { transform: rotateY(0deg); } 100% { transform: rotateY(-180deg); } }
-    .quote-box { text-align: center; font-family: 'Georgia', serif; font-style: italic; color: #444; background: #f9f9f9; padding: 20px; border-radius: 12px; border-left: 6px solid #1e1e1e; }
+    .quote-box { text-align: center; font-family: 'Courier New', Courier, monospace; font-weight: bold; color: #1a1a1a; background: #fdfd96; padding: 20px; border-radius: 10px; border: 3px solid #333; box-shadow: 5px 5px 0px #000; max-width: 600px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNKCJE LOGICZNE ---
+# --- FUNKCJE POMOCNICZE ---
 
-def clean_to_digits(text):
-    """Zmienia 'ISBN 978-83-288...' na '97883288...'"""
-    return re.sub(r'\D', '', str(text))
+def clean_html(text):
+    if not text: return ""
+    clean = re.compile('<.*?>')
+    return re.sub(clean, '', str(text))
 
 def get_ean_variants(ean_raw):
-    s = clean_to_digits(ean_raw)
+    s = re.sub(r'\D', '', str(ean_raw))
     if not s: return []
     v = [s]
     if s.startswith('0'): v.append(s[1:])
@@ -42,107 +48,85 @@ def get_ean_variants(ean_raw):
     if len(s) >= 10: v.append(s[-10:])
     return list(dict.fromkeys(v))
 
-def fetch_book_info(variants):
-    """Pobiera dane, resetując wynik dla każdego nowego zapytania."""
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
-    
+def fetch_open_library(variants):
+    """Odpytuje wyłącznie Open Library."""
     for e in variants:
-        # --- 1. WOLNE LEKTURY (Głębokie przeszukiwanie) ---
         try:
-            # Szukamy po ISBN (API Wolnych Lektur radzi sobie z różnymi formatami)
-            wl_url = f"https://wolnelektury.pl/api/books/?isbn={e}"
-            r = requests.get(wl_url, timeout=5).json()
-            
-            if r and len(r) > 0:
-                book_brief = r[0]
-                slug = book_brief.get('href', '').split('/')[-2] # pobieramy identyfikator do opisu
-                
-                # Pobieramy szczegóły (w tym opis) z dedykowanego endpointu książki
-                details = requests.get(book_brief.get('href'), timeout=5).json()
-                
-                return {
-                    "Tytuł": details.get('title'),
-                    "Autor": details.get('authors', [{}])[0].get('name', 'Nieznany'),
-                    "Wydawca": "Wolne Lektury",
-                    "Opis": details.get('description', 'Brak opisu w bazie WL'),
-                    "Link do okładki": details.get('simple_thumb'),
-                    "Źródło": "Wolne Lektury"
-                }
-        except: pass
-
-        # --- 2. GOOGLE BOOKS (Backup) ---
-        try:
-            g_url = f"https://www.googleapis.com/books/v1/volumes?q={e}&hl=pl"
-            r = requests.get(g_url, headers=headers, timeout=5).json()
-            if 'items' in r:
-                v = r['items'][0]['volumeInfo']
-                return {
-                    "ISBN-13": e,
-                    "Tytuł": v.get('title'),
-                    "Autor": ", ".join(v.get('authors', [])),
-                    "Wydawca": v.get('publisher'),
-                    "Opis": v.get('description', ""),
-                    "Źródło": "Google"
-                }
-        except: pass
-
-        # --- 3. BN (Backup) ---
-        try:
-            r = requests.get(f"https://data.bn.org.pl/api/institutions/bibs.json?isbnIssn={e}", timeout=5).json()
-            if r.get('bibs'):
-                b = r['bibs'][0]
-                return {"Tytuł": b.get('title'), "Autor": b.get('author'), "Wydawca": b.get('publisher'), "Źródło": "BN"}
-        except: pass
-
+            url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{e}&format=json&jscmd=data"
+            response = requests.get(url, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                key = f"ISBN:{e}"
+                if key in data:
+                    book = data[key]
+                    return {
+                        "Tytuł": book.get('title', "Brak tytułu"),
+                        "Autor": ", ".join([a['name'] for a in book.get('authors', [])]) if 'authors' in book else "Nieznany",
+                        "Wydawca": ", ".join([p['name'] for p in book.get('publishers', [])]) if 'publishers' in book else "Brak danych",
+                        "Opis": clean_html(book.get('notes', "Brak opisu w Open Library")),
+                        "Opublikowane": book.get('publish_date', "Brak daty"),
+                        "Link do okładki": book.get('cover', {}).get('large', ""),
+                        "Źródło": "Open Library"
+                    }
+        except:
+            continue
     return None
 
-# --- APLIKACJA ---
+# --- UI APLIKACJI ---
 
-st.title("📚 ISBN Deep Scanner (Opisy + Wolne Lektury)")
+st.title("🥃 Sunnyvale ISBN Scanner (Open Library Edition)")
+st.markdown("*„Dobra, Julian, sprawdzamy te książki, ale potem idziemy na cheeseburgery.”*")
+
 file = st.file_uploader("Wgraj plik Excel", type=["xlsx"])
 
 if file:
     df_in = pd.read_excel(file)
-    col = st.selectbox("Kolumna z EAN:", df_in.columns)
+    col = st.selectbox("Wybierz kolumnę z ISBN:", df_in.columns)
     
-    if st.button("🚀 Start"):
-        results = []
+    if st.button("🚀 Odpal silnik (Cory, Trevor, fajki już!)"):
+        final_results = []
         bar = st.progress(0)
         status = st.empty()
         anim = st.empty()
         
-        # Losowy cytat Hrabiego
-        anim.markdown(f'<div class="book-container"><div class="book"><div class="page"></div></div><div class="quote-box">{random.choice(CYTATY_HRABIEGO)}</div></div>', unsafe_allow_html=True)
+        # Animacja i cytat z Baraków
+        wybrany_cytat = random.choice(CYTATY_CHLOPAKI)
+        anim.markdown(f"""
+            <div class="book-container">
+                <div class="book"><div class="page"></div></div>
+                <div class="quote-box">{wybrany_cytat}</div>
+            </div>
+        """, unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
-            current_ean = row[col]
-            status.text(f"Sprawdzam: {current_ean}...")
+            isbn_raw = row[col]
+            status.text(f"Przeszukuję baraki dla ISBN: {isbn_raw}...")
             
-            # Reset danych i generowanie wariantów
-            variants = get_ean_variants(current_ean)
-            found_data = fetch_book_info(variants)
+            # Resetowanie danych - to zapobiega powielaniu Julesa Verne'a!
+            vars_to_check = get_ean_variants(isbn_raw)
+            book_info = fetch_open_library(vars_to_check)
             
-            # Budowa wiersza od zera (gwarantuje brak duplikatów)
-            res_row = {"EAN z pliku": current_ean}
-            headers = ["ISBN-13", "ISBN-10", "Tytuł", "Autor", "Współtwórca", "Wydawca", "Opis", "Opublikowane", "Liczba stron", "Link do okładki", "Źródło"]
+            # Budowa rekordu - jeśli nic nie znajdzie, wpisze "Brak w baraku"
+            record = {"EAN z pliku": isbn_raw}
+            headers = ["Tytuł", "Autor", "Wydawca", "Opis", "Opublikowane", "Link do okładki", "Źródło"]
             
             for h in headers:
-                if found_data and h in found_data:
-                    res_row[h] = found_data[h]
+                if book_info and h in book_info:
+                    record[h] = book_info[h]
                 else:
-                    res_row[h] = "Nie znaleziono"
+                    record[h] = "Brak w baraku"
             
-            results.append(res_row)
+            final_results.append(record)
             bar.progress((i + 1) / len(df_in))
-            time.sleep(0.4) # Bezpieczne tempo dla API
+            time.sleep(0.2) # Open Library jest w porządku, nie trzeba długo czekać
 
         anim.empty()
-        status.success("✅ Gotowe! Każda książka została pobrana niezależnie.")
+        status.success("✅ Gotowe! Wszystkie książki przemycone do Excela.")
         
-        df_res = pd.DataFrame(results)
+        df_res = pd.DataFrame(final_results)
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
             df_res.to_excel(writer, index=False)
         
-        st.download_button("📥 Pobierz poprawny Excel", buf.getvalue(), "wyniki_isbn_unikalne.xlsx")
+        st.download_button("📥 Pobierz wyniki z baraków", buf.getvalue(), "chlopaki_z_barakow_results.xlsx")
         st.dataframe(df_res)
