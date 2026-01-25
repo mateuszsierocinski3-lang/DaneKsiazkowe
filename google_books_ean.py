@@ -7,7 +7,7 @@ import io
 import random
 
 # --- KONFIGURACJA ---
-st.set_page_config(page_title="Sunnyvale ISBN-13 Deep Scan", page_icon="🥃")
+st.set_page_config(page_title="Sunnyvale AI-Description Scraper", page_icon="🥃")
 
 CYTATY_CHLOPAKI = [
     "„To nie jest żadne rocket appliances.” — Ricky",
@@ -22,9 +22,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FINALNA LOGIKA (ISBN-13 + FIX OKŁADKI + BRAK PODTYTUŁU) ---
+# --- FUNKCJA GENERUJĄCA OPIS (Gdy brak w bazie) ---
+def generate_fallback_description(title, authors, subjects):
+    if not title or title == "Brak":
+        return "Brak wystarczających danych do wygenerowania opisu."
+    
+    desc = f"Książka pt. '{title}', której autorem jest {authors if authors != 'Nieznany' else 'zespół ekspertów'}."
+    
+    if subjects and subjects != "Brak" and len(subjects) > 0:
+        main_subject = subjects.split(',')[0].strip()
+        desc += f" Pozycja ta skupia się na zagadnieniach z obszaru: {main_subject.lower()}."
+    
+    desc += " Stanowi istotne opracowanie w swojej dziedzinie, przeznaczone dla czytelników poszukujących rzetelnej wiedzy."
+    return desc
 
-def fetch_book_data_final(isbn):
+# --- LOGIKA POBIERANIA ---
+def fetch_book_data_ai(isbn):
     isbn_clean = re.sub(r'\D', '', str(isbn))
     if not isbn_clean: return None
     
@@ -40,68 +53,65 @@ def fetch_book_data_final(isbn):
                 d_details = res[key].get('details', {})
                 d_idents = d_details.get('identifiers', {})
                 
-                # 1. Tytuł i Autorzy (Fallback)
-                title = d_main.get('title') or d_details.get('title')
+                # Dane podstawowe
+                title = d_main.get('title') or d_details.get('title') or "Brak"
                 authors_list = d_main.get('authors') or d_details.get('authors')
                 authors = ", ".join([a.get('name', 'Nieznany') for a in authors_list]) if authors_list else "Nieznany"
+                
+                def get_clean_list(field_name):
+                    data = d_main.get(field_name) or d_details.get(field_name) or []
+                    if isinstance(data, list) and data:
+                        if isinstance(data[0], dict): return ", ".join([x.get('name', str(x)) for x in data])
+                        return ", ".join([str(x) for x in data])
+                    return "Brak"
 
-                # 2. ISBN-13 (Pobieranie z wielu miejsc w JSON)
-                isbn13_list = d_details.get('isbn_13') or d_idents.get('isbn_13') or []
-                isbn13 = ", ".join(isbn13_list) if isbn13_list else "Brak"
+                subjects = get_clean_list('subjects')
+                
+                # POBIERANIE LUB GENEROWANIE OPISU
+                raw_notes = d_main.get('notes') or d_details.get('notes', "")
+                # Obsługa formatu słownikowego Open Library dla opisów
+                if isinstance(raw_notes, dict): raw_notes = raw_notes.get('value', "")
+                
+                if not raw_notes or len(str(raw_notes)) < 15:
+                    description = generate_fallback_description(title, authors, subjects)
+                    source_desc = "Wygenerowany (Brak w bazie)"
+                else:
+                    description = str(raw_notes).strip()
+                    source_desc = "Baza Open Library"
 
-                # 3. Fix Okładki (L)
+                # Okładka (Fix linku L)
                 cover_url = "Brak okładki"
                 if res[key].get('thumbnail_url'):
                     cover_url = res[key].get('thumbnail_url').replace("-S.jpg", "-L.jpg").replace("-M.jpg", "-L.jpg")
-                elif d_main.get('cover', {}).get('large'):
-                    cover_url = d_main.get('cover', {}).get('large')
                 elif d_details.get('covers'):
                     cid = d_details.get('covers')[0]
-                    if cid and cid != -1:
-                        cover_url = f"https://covers.openlibrary.org/b/id/{cid}-L.jpg"
-
-                # Funkcja do list (Subjects, Places itp.)
-                def get_clean_list(field_name):
-                    data = d_main.get(field_name) or d_details.get(field_name) or []
-                    if not data: return ""
-                    if isinstance(data, list):
-                        if len(data) > 0 and isinstance(data[0], dict):
-                            return ", ".join([x.get('name', str(x)) for x in data])
-                        return ", ".join([str(x) for x in data])
-                    return str(data)
+                    if cid and cid != -1: cover_url = f"https://covers.openlibrary.org/b/id/{cid}-L.jpg"
 
                 return {
                     "Tytuł": title,
                     "Autorzy": authors,
-                    "ISBN-13 (z bazy)": isbn13,
+                    "Krótki Opis": description,
+                    "Źródło Opisu": source_desc,
+                    "ISBN-13": ", ".join(d_details.get('isbn_13', []) or d_idents.get('isbn_13', [])),
                     "ISBN-10": ", ".join(d_details.get('isbn_10', []) or d_idents.get('isbn_10', [])),
                     "Wydawcy": get_clean_list('publishers'),
-                    "Miejsca wydania": get_clean_list('publish_places') or get_clean_list('publish_place'),
                     "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date'),
-                    "Liczba stron": d_main.get('number_of_pages') or d_details.get('number_of_pages'),
-                    "Opis/Notatki": str(d_main.get('notes', d_details.get('notes', ""))),
-                    "Tematy (Subjects)": get_clean_list('subjects'),
-                    "Miejsca (Subject Places)": get_clean_list('subject_place') or get_clean_list('subject_places'),
-                    "Link do okładki (L)": cover_url,
-                    "LCCN": ", ".join(d_details.get('lccn', []) or d_idents.get('lccn', [])),
-                    "OCLC": ", ".join(d_details.get('oclc_numbers', []) or d_idents.get('oclc', [])),
-                    "Źródło": "Open Library Deep Export"
+                    "Tematy": subjects,
+                    "Link do okładki (L)": cover_url
                 }
-    except:
-        pass
+    except: pass
     return None
 
 # --- UI STREAMLIT ---
-
-st.title("🥃 Sunnyvale Deep Scan: ISBN-13 Edition")
-st.markdown("Skrypt wyciąga ISBN-13, ISBN-10 i wszystkie głębokie dane bez podtytułów.")
+st.title("🥃 Sunnyvale AI-Description Scanner")
+st.markdown("*„Książki są fajne, ale opisy same się nie napiszą, Julian.”*")
 
 file = st.file_uploader("Wgraj plik Excel", type=["xlsx"])
 if file:
     df_in = pd.read_excel(file)
-    col = st.selectbox("Wybierz kolumnę z Twoim EAN/ISBN:", df_in.columns)
+    col = st.selectbox("Wybierz kolumnę z ISBN:", df_in.columns)
     
-    if st.button("🚀 Rozpocznij skanowanie"):
+    if st.button("🚀 Skanuj i Generuj Opisy"):
         results = []
         bar = st.progress(0)
         status = st.empty()
@@ -109,25 +119,16 @@ if file:
         st.markdown(f'<div class="quote-box">{random.choice(CYTATY_CHLOPAKI)}</div>', unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
-            ean_in = row[col]
-            status.text(f"Pobieram dane dla: {ean_in}...")
+            ean_val = row[col]
+            status.text(f"Przetwarzam barakowy towar: {ean_val}...")
             
-            data = fetch_book_data_final(ean_in)
+            data = fetch_book_data_ai(ean_val)
             
-            res_row = {"EAN z pliku": ean_in}
-            # Nowy zestaw nagłówków z ISBN-13 na początku
-            headers = [
-                "Tytuł", "Autorzy", "ISBN-13 (z bazy)", "ISBN-10", "Wydawcy", 
-                "Miejsca wydania", "Data publikacji", "Liczba stron", 
-                "Opis/Notatki", "Tematy (Subjects)", "Miejsca (Subject Places)", 
-                "Link do okładki (L)", "LCCN", "OCLC"
-            ]
+            res_row = {"EAN z pliku": ean_val}
+            headers = ["Tytuł", "Autorzy", "Krótki Opis", "Źródło Opisu", "ISBN-13", "ISBN-10", "Wydawcy", "Data publikacji", "Link do okładki (L)"]
             
             for h in headers:
-                if data and h in data:
-                    res_row[h] = data[h]
-                else:
-                    res_row[h] = "Brak"
+                res_row[h] = data.get(h, "Brak") if data else "Nie znaleziono"
             
             results.append(res_row)
             bar.progress((i + 1) / len(df_in))
@@ -138,6 +139,6 @@ if file:
         with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
             df_res.to_excel(writer, index=False)
         
-        st.success("✅ Gotowe! Wszystko na paki.")
-        st.download_button("📥 Pobierz Excel z ISBN-13 i okładkami", buf.getvalue(), "sunnyvale_isbn13_final.xlsx")
+        st.success("✅ Gotowe! Wszystko przemycone do Excela.")
+        st.download_button("📥 Pobierz Excel z Opisami", buf.getvalue(), "sunnyvale_ai_results.xlsx")
         st.dataframe(df_res)
