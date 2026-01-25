@@ -9,7 +9,7 @@ import random
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="centered")
 
-# --- CACHE DLA SZYBKOŚCI DZIAŁANIA ---
+# --- CACHE ---
 @st.cache_data(ttl=3600)
 def get_api_response(url):
     try:
@@ -26,75 +26,22 @@ CYTATY_MONTE_CHRISTO = [
     "„Szczęście jest jak te pałace z bajek, których strzegą smoki. Trzeba walczyć, by je zdobyć.”",
     "„Wszyscy jesteśmy sprawcami własnego losu.”",
     "„Tylko ten, kto poznał smak najwyższej rozpaczy, zdolny jest odczuć największe szczęście.”",
-    "„Moim zawodem jest być wolnym.”",
-    "„Rany, które zadajemy sobie sami, goją się najwolniej.”"
+    "„Moim zawodem jest być wolnym.”"
 ]
 
-# --- STYLE CSS I ANIMACJA STRON ---
+# --- STYLE I ANIMACJA ---
 st.markdown("""
 <style>
-    /* Animacja przewracanych stron */
-    .book-container {
-        display: flex;
-        justify-content: center;
-        padding: 20px;
-    }
-    .loader-book {
-        width: 50px;
-        height: 35px;
-        position: relative;
-        border: 3px solid #2c3e50;
-    }
-    .loader-book::after {
-        content: '';
-        position: absolute;
-        left: 50%;
-        top: 0;
-        width: 1px;
-        height: 100%;
-        background: #2c3e50;
-    }
-    .page {
-        position: absolute;
-        right: 0;
-        top: 0;
-        width: 50%;
-        height: 100%;
-        background: #ecf0f1;
-        transform-origin: left center;
-        animation: flip 1.5s infinite ease-in-out;
-        border-left: 1px solid #bdc3c7;
-    }
-    @keyframes flip {
-        0% { transform: rotateY(0deg); }
-        80%, 100% { transform: rotateY(-180deg); }
-    }
-
-    /* Wygląd cytatu */
-    .quote-style {
-        text-align: center;
-        font-family: 'Georgia', serif;
-        font-style: italic;
-        color: #2c3e50;
-        background: #fdfcf0;
-        padding: 20px;
-        border-radius: 5px;
-        border-left: 5px solid #2c3e50;
-        margin: 20px 0;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.05);
-    }
+    .book-container { display: flex; justify-content: center; padding: 20px; }
+    .loader-book { width: 50px; height: 35px; position: relative; border: 3px solid #2c3e50; background: white; }
+    .loader-book::after { content: ''; position: absolute; left: 50%; top: 0; width: 1px; height: 100%; background: #2c3e50; }
+    .page { position: absolute; right: 0; top: 0; width: 50%; height: 100%; background: #f0f0f0; transform-origin: left center; animation: flip 1.2s infinite ease-in-out; border-left: 1px solid #ccc; }
+    @keyframes flip { 0% { transform: rotateY(0deg); } 80%, 100% { transform: rotateY(-180deg); } }
+    .quote-style { text-align: center; font-family: 'Georgia', serif; font-style: italic; color: #2c3e50; background: #fdfcf0; padding: 20px; border-left: 5px solid #2c3e50; margin: 20px 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- GENERATOR OPISÓW ---
-def create_fallback_description(title, authors, subjects):
-    if not title or title == "Brak": return "Brak wystarczających informacji w rejestrach."
-    desc = f"Dzieło pt. '{title}', autorstwa {authors if authors != 'Nieznany' else 'nieokreślonego twórcy'}."
-    if subjects and subjects != "Brak":
-        desc += f" Treść koncentruje się na zagadnieniach z zakresu: {subjects.split(',')[0].lower()}."
-    return desc + " Pozycja ta stanowi cenny wkład w literaturę przedmiotu."
-
-# --- LOGIKA BIBLIOTEKARZA ---
+# --- LOGIKA POBIERANIA ---
 def fetch_book_data(isbn):
     isbn_clean = re.sub(r'\D', '', str(isbn))
     if not isbn_clean: return None
@@ -109,10 +56,12 @@ def fetch_book_data(isbn):
             d_details = res[key].get('details', {})
             d_idents = d_details.get('identifiers', {})
             
+            # Tytuł i Autorzy
             title = d_main.get('title') or d_details.get('title') or "Brak"
             authors_list = d_main.get('authors') or d_details.get('authors')
             authors = ", ".join([a.get('name', 'Nieznany') for a in authors_list]) if authors_list else "Nieznany"
             
+            # Funkcja pomocnicza do list
             def get_clean_list(field_name):
                 data = d_main.get(field_name) or d_details.get(field_name) or []
                 if isinstance(data, list) and data:
@@ -120,18 +69,10 @@ def fetch_book_data(isbn):
                     return ", ".join([str(x) for x in data])
                 return "Brak"
 
-            subjects = get_clean_list('subjects')
-            
-            # Pobieranie opisu lub generowanie własnego
+            # Opis z bazy (bez generowania własnego)
             raw_notes = d_main.get('notes') or d_details.get('notes', "")
             if isinstance(raw_notes, dict): raw_notes = raw_notes.get('value', "")
-            
-            if not raw_notes or len(str(raw_notes)) < 15:
-                description = create_fallback_description(title, authors, subjects)
-                source = "Wygenerowany autorsko"
-            else:
-                description = str(raw_notes).strip()
-                source = "Baza Biblioteczna"
+            final_notes = str(raw_notes).strip() if raw_notes else "Brak opisu w bazie"
 
             # Okładka High-Res
             cover_url = "Brak okładki"
@@ -142,28 +83,36 @@ def fetch_book_data(isbn):
                 if cid and cid != -1: cover_url = f"https://covers.openlibrary.org/b/id/{cid}-L.jpg"
 
             return {
-                "Tytuł": title, "Autorzy": authors, "Opis": description,
-                "Źródło opisu": source, "ISBN-13": ", ".join(d_details.get('isbn_13', []) or d_idents.get('isbn_13', [])),
+                "Tytuł": title,
+                "Autorzy": authors,
+                "Liczba stron": d_main.get('number_of_pages') or d_details.get('number_of_pages') or "Brak",
+                "Wydawcy": get_clean_list('publishers'),
+                "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date') or "Brak",
+                "ISBN-13": ", ".join(d_details.get('isbn_13', []) or d_idents.get('isbn_13', [])),
                 "ISBN-10": ", ".join(d_details.get('isbn_10', []) or d_idents.get('isbn_10', [])),
-                "Wydawcy": get_clean_list('publishers'), "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date'),
-                "Tematy": subjects, "Link do okładki (L)": cover_url
+                "Opis z bazy": final_notes,
+                "Tematy": get_clean_list('subjects'),
+                "Miejsca wydania": get_clean_list('publish_places'),
+                "Link do okładki (L)": cover_url,
+                "LCCN": ", ".join(d_details.get('lccn', []) or d_idents.get('lccn', [])),
+                "OCLC": ", ".join(d_details.get('oclc_numbers', []) or d_idents.get('oclc', []))
             }
     return None
 
-# --- INTERFEJS ---
+# --- UI ---
 st.title("📖 Bibliotekarz")
-st.subheader("System Katalogowania Woluminów")
+st.subheader("Archiwum i Katalogowanie")
 
-if 'rejestr' not in st.session_state:
-    st.session_state.rejestr = None
+if 'results_df' not in st.session_state:
+    st.session_state.results_df = None
 
-uploaded_file = st.file_uploader("Załaduj rejestr ISBN (Excel)", type=["xlsx"])
+uploaded_file = st.file_uploader("Załaduj plik Excel", type=["xlsx"])
 
 if uploaded_file:
     df_in = pd.read_excel(uploaded_file)
-    target_col = st.selectbox("Wybierz kolumnę z identyfikatorami:", df_in.columns)
+    target_col = st.selectbox("Wybierz kolumnę ISBN:", df_in.columns)
     
-    if st.button("Uruchom skanowanie archiwów"):
+    if st.button("Rozpocznij przeszukiwanie archiwów"):
         final_data = []
         progress_bar = st.progress(0)
         status_msg = st.empty()
@@ -177,31 +126,38 @@ if uploaded_file:
 
         for i, row in df_in.iterrows():
             isbn = row[target_col]
-            status_msg.markdown(f"Analizowanie woluminu: `{isbn}`")
+            status_msg.markdown(f"Katalogowanie: `{isbn}`")
             
             book_info = fetch_book_data(isbn)
             
             entry = {"Identyfikator wejściowy": isbn}
-            headers = ["Tytuł", "Autorzy", "Opis", "Źródło opisu", "ISBN-13", "ISBN-10", "Wydawcy", "Data publikacji", "Link do okładki (L)"]
+            # Kolejność kolumn w Excelu
+            headers = [
+                "Tytuł", "Autorzy", "Liczba stron", "Wydawcy", "Data publikacji", 
+                "ISBN-13", "ISBN-10", "Opis z bazy", "Tematy", "Miejsca wydania", 
+                "Link do okładki (L)", "LCCN", "OCLC"
+            ]
             
             for h in headers:
-                entry[h] = book_info.get(h, "Brak danych") if book_info else "Nie odnaleziono"
+                if book_info:
+                    entry[h] = book_info.get(h, "Brak")
+                else:
+                    entry[h] = "Nie odnaleziono"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.05) # Szybkie przetwarzanie dzięki cache
+            time.sleep(0.1)
 
         anim_placeholder.empty()
         quote_placeholder.empty()
-        status_msg.success("Katalogowanie zakończone.")
-        st.session_state.rejestr = pd.DataFrame(final_data)
+        status_msg.success("Zasoby zostały skatalogowane.")
+        st.session_state.results_df = pd.DataFrame(final_data)
 
-if st.session_state.rejestr is not None:
-    df_res = st.session_state.rejestr
-    
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+if st.session_state.results_df is not None:
+    df_res = st.session_state.results_df
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         df_res.to_excel(writer, index=False)
     
-    st.download_button("📥 Pobierz Gotowy Rejestr (Excel)", output.getvalue(), "rejestr_bibliotekarza.xlsx")
+    st.download_button("📥 Pobierz Rejestr Bibliotekarza", buf.getvalue(), "rejestr_bibliotekarza.xlsx")
     st.dataframe(df_res)
