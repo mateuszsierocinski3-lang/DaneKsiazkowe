@@ -3,40 +3,31 @@ import pandas as pd
 import google.generativeai as genai
 import json
 import io
-import random
 import time
 
-# --- KONFIGURACJA ---
-st.set_page_config(page_title="Darmowy Bibliotekarz AI", page_icon="📚", layout="centered")
+# --- KONFIGURACJA STRONY ---
+st.set_page_config(page_title="Bibliotekarz Gemini AI", page_icon="📚", layout="centered")
 
-# --- KLUCZ API I KONFIGURACJA MODELU ---
-# WKLEJ SWÓJ KLUCZ PONIŻEJ:
-API_KEY = "AIzaSyAng8dcG9iUIQ6L2H5iK7QuHkiPSovJ3eU" 
+# --- KLUCZ API (Wklej swój klucz poniżej) ---
+API_KEY = "AIzaSy..." 
 
-genai.configure(api_key=API_KEY)
+# Konfiguracja Google AI
+if API_KEY != "AIzaSy...":
+    genai.configure(api_key=API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    st.warning("⚠️ Nie zapomnij wkleić swojego klucza API w kodzie (linia 12)!")
 
-# Ustawienie modelu - używamy wersji 'latest' dla lepszej kompatybilności
-generation_config = {
-    "temperature": 0.7,
-    "top_p": 0.95,
-    "top_k": 64,
-    "max_output_tokens": 8192,
-    "response_mime_type": "application/json",
-}
-
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash-latest",
-    generation_config=generation_config,
-)
-
-# --- LOGIKA POBIERANIA DANYCH ---
+# --- FUNKCJA POBIERANIA DANYCH ---
 def fetch_book_data_gemini(query):
-    try:
-        prompt = f"""
-        Jesteś ekspertem bibliotekarstwa. Na podstawie zapytania: "{query}", znajdź dane książki.
-        Zwróć dane w formacie JSON. W polu 'Opis' stwórz bogaty, merytoryczny i marketingowy opis książki po polsku.
+    if API_KEY == "AIzaSy...":
+        return None
         
-        Wymagany format JSON:
+    try:
+        # Prompt wymuszający format JSON
+        prompt = f"""
+        Znajdź dane książki: "{query}".
+        Zwróć dane WYŁĄCZNIE jako obiekt JSON w formacie:
         {{
             "Tytuł": "...",
             "Autorzy": "...",
@@ -45,87 +36,85 @@ def fetch_book_data_gemini(query):
             "Data publikacji": "...",
             "ISBN-13": "...",
             "ISBN-10": "...",
-            "Opis": "...",
+            "Opis": "tutaj stwórz bogaty opis po polsku",
             "Tematy": "...",
             "Miejsca wydania": "..."
         }}
-        Jeśli nie znasz jakiejś danej, wpisz "Brak".
         """
-        response = model.generate_content(prompt)
-        # Parsowanie tekstu na słownik Pythona
-        return json.loads(response.text)
+        
+        # Ustawienie generowania JSON (wymaga nowszej biblioteki)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(response_mime_type="application/json")
+        )
+        
+        if response and response.text:
+            return json.loads(response.text)
+        return None
+
     except Exception as e:
-        # Wyświetlamy błąd tylko w konsoli, aby nie psuć tabeli użytkownikowi
-        print(f"Błąd przy {query}: {e}")
+        # To wyświetli nam konkretny powód błędu w aplikacji
+        st.error(f"❌ Błąd dla '{query}': {str(e)}")
         return None
 
 # --- UI APLIKACJI ---
-st.title("📚 Bibliotekarz Gemini")
-st.subheader("Darmowe Katalogowanie AI")
+st.title("📚 Bibliotekarz Gemini (Darmowy)")
+st.write("Skonfigurowano model: **Gemini 1.5 Flash**")
 
-uploaded_file = st.file_uploader("Załaduj plik Excel (xlsx)", type=["xlsx"])
+uploaded_file = st.file_uploader("Załaduj plik Excel (.xlsx)", type=["xlsx"])
 
 if uploaded_file:
     df_in = pd.read_excel(uploaded_file)
-    target_col = st.selectbox("Wybierz kolumnę z danymi (ISBN lub Tytuł):", df_in.columns)
+    target_col = st.selectbox("Wybierz kolumnę z ISBN/Tytułem:", df_in.columns)
     
-    if st.button("Rozpocznij proces"):
-        if API_KEY == "AIzaSy...":
-            st.error("Błąd: Nie podmieniłeś klucza API w kodzie!")
-        else:
-            final_data = []
-            progress_bar = st.progress(0)
-            status_text = st.empty()
+    if st.button("Rozpocznij katalogowanie"):
+        final_data = []
+        progress_bar = st.progress(0)
+        status_msg = st.empty()
+        
+        for i, row in df_in.iterrows():
+            book_query = str(row[target_col])
+            status_msg.info(f"Przetwarzam {i+1}/{len(df_in)}: {book_query}")
             
-            for i, row in df_in.iterrows():
-                book_query = str(row[target_col])
-                status_text.text(f"Przetwarzam ({i+1}/{len(df_in)}): {book_query}")
-                
-                res = fetch_book_data_gemini(book_query)
-                
-                entry = {"Szukana fraza": book_query}
-                
-                # Definiujemy nagłówki tabeli
-                headers = [
-                    "Tytuł", "Autorzy", "Liczba stron", "Wydawcy", 
-                    "Data publikacji", "ISBN-13", "ISBN-10", "Opis", 
-                    "Tematy", "Miejsca wydania"
-                ]
-                
-                for h in headers:
-                    if res:
-                        entry[h] = res.get(h, "Brak")
-                    else:
-                        entry[h] = "Błąd"
-                
-                final_data.append(entry)
-                
-                # Aktualizacja paska postępu
-                progress_bar.progress((i + 1) / len(df_in))
-                
-                # Mała przerwa dla darmowego API (limit zapytań na minutę)
-                time.sleep(2) 
+            # Wywołanie AI
+            res = fetch_book_data_gemini(book_query)
+            
+            entry = {"Szukana fraza": book_query}
+            headers = [
+                "Tytuł", "Autorzy", "Liczba stron", "Wydawcy", 
+                "Data publikacji", "ISBN-13", "ISBN-10", "Opis", 
+                "Tematy", "Miejsca wydania"
+            ]
+            
+            for h in headers:
+                if res:
+                    entry[h] = res.get(h, "Brak danych")
+                else:
+                    entry[h] = "BŁĄD (zobacz komunikat wyżej)"
+            
+            final_data.append(entry)
+            progress_bar.progress((i + 1) / len(df_in))
+            
+            # Czekamy 2 sekundy, żeby nie przekroczyć darmowego limitu (15 RPM)
+            time.sleep(2)
 
-            st.session_state.res_df = pd.DataFrame(final_data)
-            status_text.success("Katalogowanie zakończone pomyślnie!")
+        st.session_state.results_df = pd.DataFrame(final_data)
+        status_msg.success("Zakończono! Możesz pobrać plik.")
 
-# --- WYŚWIETLANIE WYNIKÓW ---
-if 'res_df' in st.session_state:
-    df_res = st.session_state.res_df
+# --- WYŚWIETLANIE I POBIERANIE ---
+if 'results_df' in st.session_state:
+    df_res = st.session_state.results_df
     
-    st.divider()
-    
-    # Przycisk pobierania
+    # Przygotowanie Excela w pamięci
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         df_res.to_excel(writer, index=False)
     
     st.download_button(
-        label="📥 Pobierz gotowy Excel",
+        label="📥 Pobierz gotowy raport Excel",
         data=buf.getvalue(),
-        file_name="skatalogowane_ksiazki.xlsx",
+        file_name="skatalogowane_ksiazki_gemini.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     
-    # Podgląd tabeli
     st.dataframe(df_res)
