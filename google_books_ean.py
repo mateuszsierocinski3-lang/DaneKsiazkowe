@@ -9,7 +9,7 @@ import time
 st.set_page_config(page_title="Bibliotekarz Gemini AI", page_icon="📚", layout="centered")
 
 # --- KLUCZ API (Wklej swój klucz poniżej) ---
-API_KEY = "AIzaSy..." 
+API_KEY = "AIzaSyAng8dcG9iUIQ6L2H5iK7QuHkiPSovJ3eU" 
 
 # Konfiguracja Google AI
 if API_KEY != "AIzaSy...":
