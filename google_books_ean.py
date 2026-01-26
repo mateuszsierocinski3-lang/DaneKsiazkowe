@@ -68,7 +68,7 @@ st.title("🤖 Bibliotekarz AI")
 st.subheader("Inteligentne Katalogowanie z GPT")
 
 # Pole na klucz API
-api_key = "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"
+api_key = "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"
 
 if 'results_df' not in st.session_state:
     st.session_state.results_df = None
