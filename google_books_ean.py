@@ -11,7 +11,7 @@ st.set_page_config(page_title="Darmowy Bibliotekarz AI", page_icon="📚", layou
 
 # --- KLUCZ API I KONFIGURACJA MODELU ---
 # WKLEJ SWÓJ KLUCZ PONIŻEJ:
-API_KEY = "AIzaSy..." 
+API_KEY = "AIzaSyAng8dcG9iUIQ6L2H5iK7QuHkiPSovJ3eU" 
 
 genai.configure(api_key=API_KEY)
 
