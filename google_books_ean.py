@@ -6,79 +6,86 @@ import io
 import time
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Bibliotekarz Gemini PRO", page_icon="📚")
+st.set_page_config(page_title="Bibliotekarz AI - Naprawiony", page_icon="📖")
 
-# --- KLUCZ API ---
-API_KEY = "AIzaSyAng8dcG9iUIQ6L2H5iK7QuHkiPSovJ3eU" # <--- WKLEJ TUTAJ SWÓJ KLUCZ
+# --- KLUCZ API (Wstaw swój klucz z AI Studio poniżej) ---
+API_KEY = "AIzaSy..." 
 
-if API_KEY != "AIzaSy...":
-    genai.configure(api_key=API_KEY)
+# Konfiguracja bezpiecznego połączenia
+if API_KEY != "AIzaSyAng8dcG9iUIQ6L2H5iK7QuHkiPSovJ3eU":
+    try:
+        genai.configure(api_key=API_KEY)
+        # Używamy konkretnej, pełnej ścieżki do modelu, co często rozwiązuje błąd 404
+        model = genai.GenerativeModel('models/gemini-1.5-flash')
+    except Exception as e:
+        st.error(f"Błąd konfiguracji: {e}")
 else:
-    st.error("Uzupełnij klucz API w kodzie!")
+    st.warning("Wklej swój klucz API w linii 12 kodu!")
 
-# --- FUNKCJA POBIERANIA DANYCH Z AUTOMATYCZNYM WYBOREM MODELU ---
-def fetch_book_data_gemini(query):
-    # Lista nazw modeli od najnowszych do najstarszych
-    model_names = [
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "models/gemini-1.5-flash",
-        "gemini-pro"
-    ]
-    
-    last_error = ""
-    
-    for m_name in model_names:
-        try:
-            model = genai.GenerativeModel(m_name)
-            prompt = f"Podaj dane książki: {query}. Zwróć WYŁĄCZNIE JSON: {{'Tytuł':'','Autorzy':'','Opis':'opis po polsku'}}"
-            
-            # Próba generowania
-            response = model.generate_content(prompt)
-            
-            if response and response.text:
-                # Wyciągamy czysty tekst JSON (na wypadek gdyby model dodał ```json)
-                clean_text = response.text.replace('```json', '').replace('```', '').strip()
-                return json.loads(clean_text)
-        except Exception as e:
-            last_error = str(e)
-            continue # Próbuj kolejny model z listy
-            
-    st.error(f"❌ Żaden model nie odpowiedział. Ostatni błąd: {last_error}")
-    return None
+def fetch_book_data(query):
+    try:
+        # Bardzo uproszczony prompt - mniejsza szansa na błąd modelu
+        prompt = f"Podaj dane książki: {query}. Odpowiedz tylko czystym JSON: {{\"Tytuł\":\"\", \"Autorzy\":\"\", \"Opis\":\"\"}}"
+        
+        # Próba generowania z obsługą błędów wersji
+        response = model.generate_content(prompt)
+        
+        # Wyciąganie tekstu i czyszczenie z ewentualnych znaczników ```json
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        
+        return json.loads(raw_text)
+    except Exception as e:
+        # To pokaże nam, czy błąd 404 nadal występuje, czy jest to inny problem
+        st.error(f"Błąd dla {query}: {str(e)}")
+        return None
 
-# --- UI ---
-st.title("📚 Bibliotekarz AI (Naprawiony)")
+# --- INTERFEJS ---
+st.title("📚 Bibliotekarz Gemini")
+st.info("Jeśli nadal widzisz błąd 404, upewnij się, że klucz pochodzi z Google AI Studio, a nie z Google Cloud Console.")
 
-uploaded_file = st.file_uploader("Załaduj Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Załaduj plik Excel", type=["xlsx"])
 
 if uploaded_file and API_KEY != "AIzaSy...":
     df_in = pd.read_excel(uploaded_file)
-    target_col = st.selectbox("Kolumna z danymi:", df_in.columns)
+    target_col = st.selectbox("Wybierz kolumnę z ISBN/Tytułem:", df_in.columns)
     
-    if st.button("Uruchom"):
-        results = []
-        bar = st.progress(0)
+    if st.button("Uruchom katalogowanie"):
+        final_results = []
+        progress_bar = st.progress(0)
         
         for i, row in df_in.iterrows():
             q = str(row[target_col])
-            res = fetch_book_data_gemini(q)
+            res = fetch_book_data(q)
             
-            row_data = {"Szukana fraza": q}
-            fields = ["Tytuł", "Autorzy", "Opis"]
-            for f in fields:
-                row_data[f] = res.get(f, "Brak") if res else "Błąd"
+            entry = {"Szukana fraza": q}
+            # Mapowanie pól z JSONa do Excela
+            entry["Tytuł"] = res.get("Tytuł", "Brak") if res else "Błąd"
+            entry["Autorzy"] = res.get("Autorzy", "Brak") if res else "Błąd"
+            entry["Opis"] = res.get("Opis", "Brak") if res else "Błąd"
             
-            results.append(row_data)
-            bar.progress((i + 1) / len(df_in))
-            time.sleep(1.5) # Przerwa dla darmowego konta
+            final_results.append(entry)
+            progress_bar.progress((i + 1) / len(df_in))
+            # Czekamy 2 sekundy (limit 15 zapytań na minutę w wersji darmowej)
+            time.sleep(2)
             
-        st.session_state.final_df = pd.DataFrame(results)
-        st.success("Zrobione!")
+        st.session_state.final_df = pd.DataFrame(final_results)
+        st.success("Katalogowanie zakończone!")
 
+# --- WYNIKI ---
 if 'final_df' in st.session_state:
     st.dataframe(st.session_state.final_df)
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+    
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         st.session_state.final_df.to_excel(writer, index=False)
-    st.download_button("Pobierz wynik", buf.getvalue(), "wynik.xlsx")
+    
+    st.download_button(
+        label="📥 Pobierz wynikowy Excel",
+        data=output.getvalue(),
+        file_name="wyniki_ai.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
