@@ -29,6 +29,46 @@ CYTATY_MONTE_CHRISTO = [
     "„Moim zawodem jest być wolnym.”"
 ]
 
+# --- GENERATOR OPISU (BEZ AI) ---
+def generate_custom_description(data):
+    """Tworzy opis książki na podstawie dostępnych metadanych."""
+    if not data or data.get("Tytuł") == "Brak":
+        return "Brak wystarczających danych do wygenerowania opisu."
+
+    t = data.get("Tytuł")
+    a = data.get("Autorzy")
+    w = data.get("Wydawcy")
+    d = data.get("Data publikacji")
+    s = data.get("Tematy")
+    p = data.get("Liczba stron")
+
+    # Warianty rozpoczęcia
+    starts = [
+        f"Książka „{t}” to dzieło, którego autorem jest {a}.",
+        f"„{t}” wyszła spod pióra autora: {a}.",
+        f"Pozycja zatytułowana „{t}” stanowi istotną część dorobku, za którym stoi {a}."
+    ]
+    
+    # Informacje o wydaniu
+    middle = []
+    if w != "Brak":
+        middle.append(f"Została opublikowana przez wydawnictwo {w}")
+    if d != "Brak":
+        middle.append(f"w roku {d}" if w != "Brak" else f"Ukazała się w roku {d}")
+    
+    mid_text = " ".join(middle) + "." if middle else ""
+
+    # Szczegóły techniczne
+    tech = ""
+    if p != "Brak":
+        tech = f"Publikacja liczy {p} stron. "
+    
+    subj = ""
+    if s != "Brak":
+        subj = f"Tematyka oscyluje wokół zagadnień takich jak: {s}."
+
+    return f"{random.choice(starts)} {mid_text} {tech}{subj}".strip()
+
 # --- STYLE I ANIMACJA ---
 st.markdown("""
 <style>
@@ -56,12 +96,10 @@ def fetch_book_data(isbn):
             d_details = res[key].get('details', {})
             d_idents = d_details.get('identifiers', {})
             
-            # Tytuł i Autorzy
             title = d_main.get('title') or d_details.get('title') or "Brak"
             authors_list = d_main.get('authors') or d_details.get('authors')
             authors = ", ".join([a.get('name', 'Nieznany') for a in authors_list]) if authors_list else "Nieznany"
             
-            # Funkcja pomocnicza do list
             def get_clean_list(field_name):
                 data = d_main.get(field_name) or d_details.get(field_name) or []
                 if isinstance(data, list) and data:
@@ -69,12 +107,6 @@ def fetch_book_data(isbn):
                     return ", ".join([str(x) for x in data])
                 return "Brak"
 
-            # Opis z bazy (bez generowania własnego)
-            raw_notes = d_main.get('notes') or d_details.get('notes', "")
-            if isinstance(raw_notes, dict): raw_notes = raw_notes.get('value', "")
-            final_notes = str(raw_notes).strip() if raw_notes else "Brak opisu w bazie"
-
-            # Okładka High-Res
             cover_url = "Brak okładki"
             if res[key].get('thumbnail_url'):
                 cover_url = res[key].get('thumbnail_url').replace("-S.jpg", "-L.jpg").replace("-M.jpg", "-L.jpg")
@@ -90,7 +122,6 @@ def fetch_book_data(isbn):
                 "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date') or "Brak",
                 "ISBN-13": ", ".join(d_details.get('isbn_13', []) or d_idents.get('isbn_13', [])),
                 "ISBN-10": ", ".join(d_details.get('isbn_10', []) or d_idents.get('isbn_10', [])),
-                "Opis z bazy": final_notes,
                 "Tematy": get_clean_list('subjects'),
                 "Miejsca wydania": get_clean_list('publish_places'),
                 "Link do okładki (L)": cover_url,
@@ -117,7 +148,6 @@ if uploaded_file:
         progress_bar = st.progress(0)
         status_msg = st.empty()
         
-        # Animacja i Cytat
         anim_placeholder = st.empty()
         anim_placeholder.markdown('<div class="book-container"><div class="loader-book"><div class="page"></div></div></div>', unsafe_allow_html=True)
         
@@ -131,10 +161,9 @@ if uploaded_file:
             book_info = fetch_book_data(isbn)
             
             entry = {"Identyfikator wejściowy": isbn}
-            # Kolejność kolumn w Excelu
             headers = [
                 "Tytuł", "Autorzy", "Liczba stron", "Wydawcy", "Data publikacji", 
-                "ISBN-13", "ISBN-10", "Opis z bazy", "Tematy", "Miejsca wydania", 
+                "ISBN-13", "ISBN-10", "Tematy", "Miejsca wydania", 
                 "Link do okładki (L)", "LCCN", "OCLC"
             ]
             
@@ -143,6 +172,9 @@ if uploaded_file:
                     entry[h] = book_info.get(h, "Brak")
                 else:
                     entry[h] = "Nie odnaleziono"
+            
+            # DODANIE GENEROWANEGO OPISU
+            entry["Wygenerowany Opis"] = generate_custom_description(book_info)
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
