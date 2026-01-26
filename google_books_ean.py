@@ -29,10 +29,10 @@ CYTATY_MONTE_CHRISTO = [
     "„Moim zawodem jest być wolnym.”"
 ]
 
-# --- GENERATOR OPISU (BEZ AI) ---
+# --- INTELIGENTNY GENERATOR OPISU (BEZ AI) ---
 def generate_custom_description(data):
-    """Tworzy opis książki na podstawie dostępnych metadanych."""
-    if not data or data.get("Tytuł") == "Brak":
+    """Tworzy opis książki unikając fraz 'Nieznany' i 'Brak'."""
+    if not data or data.get("Tytuł") in ["Brak", "Nieznany", None]:
         return "Brak wystarczających danych do wygenerowania opisu."
 
     t = data.get("Tytuł")
@@ -42,32 +42,42 @@ def generate_custom_description(data):
     s = data.get("Tematy")
     p = data.get("Liczba stron")
 
-    # Warianty rozpoczęcia
-    starts = [
-        f"Książka „{t}” to dzieło, którego autorem jest {a}.",
-        f"„{t}” wyszła spod pióra autora: {a}.",
-        f"Pozycja zatytułowana „{t}” stanowi istotną część dorobku, za którym stoi {a}."
-    ]
-    
-    # Informacje o wydaniu
-    middle = []
-    if w != "Brak":
-        middle.append(f"Została opublikowana przez wydawnictwo {w}")
-    if d != "Brak":
-        middle.append(f"w roku {d}" if w != "Brak" else f"Ukazała się w roku {d}")
-    
-    mid_text = " ".join(middle) + "." if middle else ""
+    # 1. Dynamiczny Autor
+    if a and a != "Nieznany" and a != "Brak":
+        starts = [
+            f"Książka „{t}” to dzieło, którego autorem jest {a}.",
+            f"„{t}” wyszła spod pióra autora: {a}.",
+            f"Pozycja zatytułowana „{t}” stanowi istotną część dorobku, za którym stoi {a}."
+        ]
+        intro = random.choice(starts)
+    else:
+        intro = f"Publikacja zatytułowana „{t}” to interesująca pozycja w katalogu wydawniczym."
 
-    # Szczegóły techniczne
+    # 2. Dynamiczny Wydawca i Data
+    middle_parts = []
+    if w and w != "Brak" and w != "Nieznany":
+        middle_parts.append(f"wydana przez {w}")
+    if d and d != "Brak" and d != "Nieznany":
+        if middle_parts:
+            middle_parts.append(f"w {d} roku")
+        else:
+            middle_parts.append(f"Opublikowana w {d} roku")
+    
+    mid_text = " ".join(middle_parts).capitalize() + "." if middle_parts else ""
+
+    # 3. Dynamiczne Strony
     tech = ""
-    if p != "Brak":
-        tech = f"Publikacja liczy {p} stron. "
-    
-    subj = ""
-    if s != "Brak":
-        subj = f"Tematyka oscyluje wokół zagadnień takich jak: {s}."
+    if p and p != "Brak" and p != "Nieznany":
+        tech = f"Na treść składa się {p} stron lektury."
 
-    return f"{random.choice(starts)} {mid_text} {tech}{subj}".strip()
+    # 4. Dynamiczne Tematy
+    subj = ""
+    if s and s != "Brak" and s != "Nieznany":
+        subj = f"Książka porusza zagadnienia z obszaru: {s}."
+
+    # Składanie całości (odfiltrowanie pustych elementów)
+    final_parts = [intro, mid_text, tech, subj]
+    return " ".join([part for part in final_parts if part]).strip()
 
 # --- STYLE I ANIMACJA ---
 st.markdown("""
@@ -167,18 +177,19 @@ if uploaded_file:
                 "Link do okładki (L)", "LCCN", "OCLC"
             ]
             
+            # Wypełnianie danych technicznych
             for h in headers:
                 if book_info:
                     entry[h] = book_info.get(h, "Brak")
                 else:
                     entry[h] = "Nie odnaleziono"
             
-            # DODANIE GENEROWANEGO OPISU
+            # Generowanie opisu w nowej kolumnie
             entry["Wygenerowany Opis"] = generate_custom_description(book_info)
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         anim_placeholder.empty()
         quote_placeholder.empty()
