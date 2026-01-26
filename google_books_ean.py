@@ -1,39 +1,13 @@
 import streamlit as st
 import pandas as pd
-import requests
-import time
-import re
+import openai
+import json
 import io
 import random
+import time
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="centered")
-
-# --- MAPOWANIE JĘZYKÓW ---
-LANG_MAP = {
-    "pol": "Polski",
-    "eng": "Angielski",
-    "ger": "Niemiecki",
-    "fre": "Francuski",
-    "ita": "Włoski",
-    "spa": "Hiszpański",
-    "rus": "Rosyjski",
-    "lat": "Łacina",
-    "cze": "Czeski",
-    "jpn": "Japoński",
-    "chi": "Chiński"
-}
-
-# --- CACHE ---
-@st.cache_data(ttl=3600)
-def get_api_response(url):
-    try:
-        r = requests.get(url, timeout=10)
-        if r.status_code == 200:
-            return r.json()
-    except:
-        return None
-    return None
+st.set_page_config(page_title="Bibliotekarz AI", page_icon="🤖", layout="centered")
 
 # --- STYLE I ANIMACJA ---
 st.markdown("""
@@ -47,127 +21,114 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- LOGIKA POBIERANIA ---
-def fetch_book_data(isbn):
-    isbn_clean = re.sub(r'\D', '', str(isbn))
-    if not isbn_clean: return None
+CYTATY_MONTE_CHRISTO = [
+    "„Cała mądrość ludzka zawiera się w tych dwóch słowach: Czekać i pokładać nadzieję!”",
+    "„Wszyscy jesteśmy sprawcami własnego losu.”",
+    "„Tylko ten, kto poznał smak najwyższej rozpaczy, zdolny jest odczuć największe szczęście.”"
+]
+
+# --- LOGIKA AI ---
+def fetch_book_data_ai(api_key, book_info_input):
+    client = openai.OpenAI(api_key=api_key)
     
-    url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn_clean}&format=json&jscmd=details"
-    res = get_api_response(url)
+    prompt = f"""
+    Jesteś profesjonalnym bibliotekarzem. Na podstawie poniższych danych: "{book_info_input}", 
+    znajdź informacje o książce i zwróć je w formacie JSON. 
+    W polu 'Opis' wygeneruj wyczerpujący, atrakcyjny opis książki (minimum 3-4 zdania).
     
-    if res:
-        key = f"ISBN:{isbn_clean}"
-        if key in res:
-            d_main = res[key].get('data', {})
-            d_details = res[key].get('details', {})
-            d_idents = d_details.get('identifiers', {})
-            
-            # Tytuł i Autorzy
-            title = d_main.get('title') or d_details.get('title') or "Brak"
-            authors_list = d_main.get('authors') or d_details.get('authors')
-            authors = ", ".join([a.get('name', 'Nieznany') for a in authors_list]) if authors_list else "Nieznany"
-            
-            # Język z tłumaczeniem
-            langs_raw = d_main.get('languages') or d_details.get('languages') or []
-            lang_names = []
-            for l in langs_raw:
-                code = l.get('key', '').replace('/languages/', '') if isinstance(l, dict) else str(l).replace('/languages/', '')
-                lang_names.append(LANG_MAP.get(code, code.upper())) # Tłumacz lub daj kod WIELKIMI literami
-            language = ", ".join(lang_names) if lang_names else "Brak danych"
+    Wymagany format JSON:
+    {{
+        "Tytuł": "...",
+        "Autorzy": "...",
+        "Liczba stron": "...",
+        "Wydawcy": "...",
+        "Data publikacji": "...",
+        "ISBN-13": "...",
+        "ISBN-10": "...",
+        "Opis": "...",
+        "Tematy": "...",
+        "Miejsca wydania": "..."
+    }}
+    Jeśli nie znasz jakiejś danej, wpisz "Brak danych". Odpowiadaj tylko czystym JSONem.
+    """
 
-            # Funkcja pomocnicza do list
-            def get_clean_list(field_name):
-                data = d_main.get(field_name) or d_details.get(field_name) or []
-                if isinstance(data, list) and data:
-                    if isinstance(data[0], dict): return ", ".join([x.get('name', str(x)) for x in data])
-                    return ", ".join([str(x) for x in data])
-                return "Brak"
-
-            # Opis
-            raw_notes = d_main.get('notes') or d_details.get('notes', "")
-            if isinstance(raw_notes, dict): raw_notes = raw_notes.get('value', "")
-            final_notes = str(raw_notes).strip() if raw_notes else "Brak opisu w bazie"
-
-            # Okładka
-            cover_url = "Brak okładki"
-            if res[key].get('thumbnail_url'):
-                cover_url = res[key].get('thumbnail_url').replace("-S.jpg", "-L.jpg").replace("-M.jpg", "-L.jpg")
-            elif d_details.get('covers'):
-                cid = d_details.get('covers')[0]
-                if cid and cid != -1: cover_url = f"https://covers.openlibrary.org/b/id/{cid}-L.jpg"
-
-            return {
-                "Tytuł": title,
-                "Autorzy": authors,
-                "Język": language,
-                "Liczba stron": d_main.get('number_of_pages') or d_details.get('number_of_pages') or "Brak",
-                "Wydawcy": get_clean_list('publishers'),
-                "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date') or "Brak",
-                "ISBN-13": ", ".join(d_details.get('isbn_13', []) or d_idents.get('isbn_13', [])),
-                "ISBN-10": ", ".join(d_details.get('isbn_10', []) or d_idents.get('isbn_10', [])),
-                "Opis z bazy": final_notes,
-                "Tematy": get_clean_list('subjects'),
-                "Miejsca wydania": get_clean_list('publish_places'),
-                "Link do okładki (L)": cover_url,
-                "LCCN": ", ".join(d_details.get('lccn', []) or d_idents.get('lccn', [])),
-                "OCLC": ", ".join(d_details.get('oclc_numbers', []) or d_idents.get('oclc', []))
-            }
-    return None
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini", # Szybki i tani model
+            messages=[{"role": "user", "content": prompt}],
+            response_format={ "type": "json_object" }
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        st.error(f"Błąd API: {e}")
+        return None
 
 # --- UI ---
-st.title("📖 Bibliotekarz")
-st.subheader("Archiwum i Katalogowanie")
+st.title("🤖 Bibliotekarz AI")
+st.subheader("Inteligentne Katalogowanie z GPT")
+
+# Pole na klucz API
+api_key = st."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", type="password")
 
 if 'results_df' not in st.session_state:
     st.session_state.results_df = None
 
-uploaded_file = st.file_uploader("Załaduj plik Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Załaduj plik Excel (z kolumną ISBN lub Tytułami)", type=["xlsx"])
 
-if uploaded_file:
+if uploaded_file and api_key:
     df_in = pd.read_excel(uploaded_file)
-    target_col = st.selectbox("Wybierz kolumnę ISBN:", df_in.columns)
+    target_col = st.selectbox("Wybierz kolumnę z danymi wejściowymi (ISBN lub Tytuł):", df_in.columns)
     
-    if st.button("Rozpocznij przeszukiwanie archiwów"):
+    if st.button("Uruchom silnik AI"):
         final_data = []
         progress_bar = st.progress(0)
         status_msg = st.empty()
         
-        # Animacja
         anim_placeholder = st.empty()
         anim_placeholder.markdown('<div class="book-container"><div class="loader-book"><div class="page"></div></div></div>', unsafe_allow_html=True)
+        
+        quote_placeholder = st.empty()
+        quote_placeholder.markdown(f'<div class="quote-style">{random.choice(CYTATY_MONTE_CHRISTO)}<br><small>— Aleksander Dumas</small></div>', unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
-            isbn = row[target_col]
-            status_msg.markdown(f"Katalogowanie: `{isbn}`")
+            book_query = row[target_col]
+            status_msg.markdown(f"Analiza AI dla: `{book_query}`")
             
-            book_info = fetch_book_data(isbn)
+            # Pobieranie danych z GPT
+            book_info = fetch_book_data_ai(api_key, book_query)
             
-            entry = {"Identyfikator wejściowy": isbn}
+            entry = {"Identyfikator wejściowy": book_query}
+            
             headers = [
-                "Tytuł", "Autorzy", "Język", "Liczba stron", "Wydawcy", "Data publikacji", 
-                "ISBN-13", "ISBN-10", "Opis z bazy", "Tematy", "Miejsca wydania", 
-                "Link do okładki (L)", "LCCN", "OCLC"
+                "Tytuł", "Autorzy", "Liczba stron", "Wydawcy", "Data publikacji", 
+                "ISBN-13", "ISBN-10", "Opis", "Tematy", "Miejsca wydania"
             ]
             
             for h in headers:
                 if book_info:
                     entry[h] = book_info.get(h, "Brak")
                 else:
-                    entry[h] = "Nie odnaleziono"
+                    entry[h] = "Błąd przetwarzania"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.05)
-
+            
         anim_placeholder.empty()
-        status_msg.success("Zasoby zostały skatalogowane.")
+        quote_placeholder.empty()
+        status_msg.success("Zasoby zostały skatalogowane przez AI.")
         st.session_state.results_df = pd.DataFrame(final_data)
 
+elif uploaded_file and not api_key:
+    st.warning("👈 Proszę wprowadzić klucz API w pasku bocznym.")
+
+# --- WYŚWIETLANIE I POBIERANIE ---
 if st.session_state.results_df is not None:
     df_res = st.session_state.results_df
+    
+    # Przygotowanie pliku do pobrania
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         df_res.to_excel(writer, index=False)
     
-    st.download_button("📥 Pobierz Rejestr Bibliotekarza", buf.getvalue(), "rejestr_bibliotekarza.xlsx")
+    st.download_button("📥 Pobierz Rejestr AI (Excel)", buf.getvalue(), "rejestr_ai.xlsx")
     st.dataframe(df_res)
