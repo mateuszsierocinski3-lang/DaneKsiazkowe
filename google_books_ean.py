@@ -9,6 +9,21 @@ import random
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="centered")
 
+# --- MAPOWANIE JĘZYKÓW ---
+LANG_MAP = {
+    "pol": "Polski",
+    "eng": "Angielski",
+    "ger": "Niemiecki",
+    "fre": "Francuski",
+    "ita": "Włoski",
+    "spa": "Hiszpański",
+    "rus": "Rosyjski",
+    "lat": "Łacina",
+    "cze": "Czeski",
+    "jpn": "Japoński",
+    "chi": "Chiński"
+}
+
 # --- CACHE ---
 @st.cache_data(ttl=3600)
 def get_api_response(url):
@@ -19,15 +34,6 @@ def get_api_response(url):
     except:
         return None
     return None
-
-# --- CYTATY: HRABIA MONTE CHRISTO ---
-CYTATY_MONTE_CHRISTO = [
-    "„Cała mądrość ludzka zawiera się w tych dwóch słowach: Czekać i pokładać nadzieję!”",
-    "„Szczęście jest jak te pałace z bajek, których strzegą smoki. Trzeba walczyć, by je zdobyć.”",
-    "„Wszyscy jesteśmy sprawcami własnego losu.”",
-    "„Tylko ten, kto poznał smak najwyższej rozpaczy, zdolny jest odczuć największe szczęście.”",
-    "„Moim zawodem jest być wolnym.”"
-]
 
 # --- STYLE I ANIMACJA ---
 st.markdown("""
@@ -61,6 +67,14 @@ def fetch_book_data(isbn):
             authors_list = d_main.get('authors') or d_details.get('authors')
             authors = ", ".join([a.get('name', 'Nieznany') for a in authors_list]) if authors_list else "Nieznany"
             
+            # Język z tłumaczeniem
+            langs_raw = d_main.get('languages') or d_details.get('languages') or []
+            lang_names = []
+            for l in langs_raw:
+                code = l.get('key', '').replace('/languages/', '') if isinstance(l, dict) else str(l).replace('/languages/', '')
+                lang_names.append(LANG_MAP.get(code, code.upper())) # Tłumacz lub daj kod WIELKIMI literami
+            language = ", ".join(lang_names) if lang_names else "Brak danych"
+
             # Funkcja pomocnicza do list
             def get_clean_list(field_name):
                 data = d_main.get(field_name) or d_details.get(field_name) or []
@@ -69,12 +83,12 @@ def fetch_book_data(isbn):
                     return ", ".join([str(x) for x in data])
                 return "Brak"
 
-            # Opis z bazy (bez generowania własnego)
+            # Opis
             raw_notes = d_main.get('notes') or d_details.get('notes', "")
             if isinstance(raw_notes, dict): raw_notes = raw_notes.get('value', "")
             final_notes = str(raw_notes).strip() if raw_notes else "Brak opisu w bazie"
 
-            # Okładka High-Res
+            # Okładka
             cover_url = "Brak okładki"
             if res[key].get('thumbnail_url'):
                 cover_url = res[key].get('thumbnail_url').replace("-S.jpg", "-L.jpg").replace("-M.jpg", "-L.jpg")
@@ -85,6 +99,7 @@ def fetch_book_data(isbn):
             return {
                 "Tytuł": title,
                 "Autorzy": authors,
+                "Język": language,
                 "Liczba stron": d_main.get('number_of_pages') or d_details.get('number_of_pages') or "Brak",
                 "Wydawcy": get_clean_list('publishers'),
                 "Data publikacji": d_main.get('publish_date') or d_details.get('publish_date') or "Brak",
@@ -117,12 +132,9 @@ if uploaded_file:
         progress_bar = st.progress(0)
         status_msg = st.empty()
         
-        # Animacja i Cytat
+        # Animacja
         anim_placeholder = st.empty()
         anim_placeholder.markdown('<div class="book-container"><div class="loader-book"><div class="page"></div></div></div>', unsafe_allow_html=True)
-        
-        quote_placeholder = st.empty()
-        quote_placeholder.markdown(f'<div class="quote-style">{random.choice(CYTATY_MONTE_CHRISTO)}<br><small>— Aleksander Dumas</small></div>', unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
             isbn = row[target_col]
@@ -131,9 +143,8 @@ if uploaded_file:
             book_info = fetch_book_data(isbn)
             
             entry = {"Identyfikator wejściowy": isbn}
-            # Kolejność kolumn w Excelu
             headers = [
-                "Tytuł", "Autorzy", "Liczba stron", "Wydawcy", "Data publikacji", 
+                "Tytuł", "Autorzy", "Język", "Liczba stron", "Wydawcy", "Data publikacji", 
                 "ISBN-13", "ISBN-10", "Opis z bazy", "Tematy", "Miejsca wydania", 
                 "Link do okładki (L)", "LCCN", "OCLC"
             ]
@@ -146,10 +157,9 @@ if uploaded_file:
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         anim_placeholder.empty()
-        quote_placeholder.empty()
         status_msg.success("Zasoby zostały skatalogowane.")
         st.session_state.results_df = pd.DataFrame(final_data)
 
