@@ -98,8 +98,8 @@ def parse_onix_data(xml_content):
 # --- UI (SIDEBAR & STYLE) ---
 with st.sidebar:
     st.header("🔑 Autoryzacja eLibri")
-    elibri_user = st.text_input("Username (API)")
-    elibri_pass = st.text_input("Password (API)", type="password")
+    elibri_user = st.text_input("Username (API)", value="empik")
+    elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
 
 st.title("📖 Bibliotekarz eLibri (ONIX Parser)")
 
