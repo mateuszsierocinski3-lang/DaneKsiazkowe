@@ -8,7 +8,7 @@ import random
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Bibliotekarz eLibri ONIX", page_icon="📖", layout="wide")
+st.set_page_config(page_title="Bibliotekarz Monte Christo", page_icon="📖", layout="wide")
 
 # --- NAMESPACE ONIX ---
 NS = {'onix': 'http://ns.editeur.org/onix/3.1/reference'}
@@ -21,7 +21,7 @@ st.markdown("""
     .loader-book::after { content: ''; position: absolute; left: 50%; top: 0; width: 1px; height: 100%; background: #2c3e50; }
     .page { position: absolute; right: 0; top: 0; width: 50%; height: 100%; background: #f0f0f0; transform-origin: left center; animation: flip 1.2s infinite ease-in-out; border-left: 1px solid #ccc; }
     @keyframes flip { 0% { transform: rotateY(0deg); } 80%, 100% { transform: rotateY(-180deg); } }
-    .quote-style { text-align: center; font-family: 'Georgia', serif; font-style: italic; color: #2c3e50; background: #fdfcf0; padding: 20px; border-left: 5px solid #2c3e50; margin: 20px 0; }
+    .quote-style { text-align: center; font-family: 'Georgia', serif; font-style: italic; color: #1a1a1a; background: #f4f4f4; padding: 25px; border-left: 5px solid #2c3e50; margin: 20px 0; line-height: 1.6; font-size: 1.1em; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -84,13 +84,25 @@ def parse_onix_data(xml_content):
     except Exception:
         return None
 
-# --- CYTATY ---
-CYTATY_MONTE_CHRISTO = [
-    "„Cała mądrość ludzka zawiera się w tych dwóch słowach: Czekać i pokładać nadzieję!”",
-    "„Szczęście jest jak te pałace z bajek, których strzegą smoki. Trzeba walczyć, by je zdobyć.”",
-    "„Wszyscy jesteśmy sprawcami własnego losu.”",
-    "„Tylko ten, kto poznał smak najwyższej rozpaczy, zdolny jest odczuć największe szczęście.”",
-    "„Moim zawodem jest być wolnym.”"
+# --- WIELKA LISTA CYTATÓW (Wersja 2.0) ---
+CYTATY = [
+    # Wiedźmin - Poprawiony cytat o jeziorze
+    "„Pomyliłeś niebo z gwiazdami odbitymi nocą na powierzchni stawu.” — A. Sapkowski",
+    "„Zło to zło. Mniejsze, większe, średnie, wszystko jedno.” — A. Sapkowski",
+    "„Miecz przeznaczenia ma dwa ostrza. Jednym jesteś ty, drugim jest śmierć.” — A. Sapkowski",
+    "„Lepiej bez celu iść naprzód niż bez celu stać w miejscu.” — A. Sapkowski",
+    "„Wiesz, co się mówi o wiedźminach? Że nie mają uczuć. Kłamią.” — A. Sapkowski",
+    "„Jeśli mam wybierać między jednym złem a drugim, wolę nie wybierać wcale.” — A. Sapkowski",
+    "„Na tej szerokości geograficznej pomyłki bywają kosztowne. Zwłaszcza pomyłki co do gwiazd na tafle jeziora.” — A. Sapkowski",
+    
+    # Hrabia Monte Christo
+    "„Cała mądrość ludzka zawiera się w tych dwóch słowach: Czekać i pokładać nadzieję!” — A. Dumas",
+    "„Tylko ten, kto poznał smak najwyższej rozpaczy, zdolny jest odczuć największe szczęście.” — A. Dumas",
+    
+    # Machiavelli
+    "„Cel uświęca środki.” — N. Machiavelli",
+    "„Ludzie błądzą w opiniach, ale rzadko w faktach.” — N. Machiavelli",
+    "„Należy bowiem wiedzieć, że są dwa sposoby walczenia: trzeba być lisem i lwem.” — N. Machiavelli"
 ]
 
 # --- UI SIDEBAR ---
@@ -100,32 +112,32 @@ with st.sidebar:
     elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
 
 # --- UI MAIN ---
-st.title("📖 Bibliotekarz eLibri ONIX")
+st.title("📖 Bibliotekarz Monte Christo")
 
 if 'results_df' not in st.session_state:
     st.session_state.results_df = None
 
-uploaded_file = st.file_uploader("Załaduj plik Excel", type=["xlsx"])
+uploaded_file = st.file_uploader("Załaduj plik Excel z numerami ISBN", type=["xlsx"])
 
 if uploaded_file:
     df_in = pd.read_excel(uploaded_file)
     target_col = st.selectbox("Wybierz kolumnę z ISBN:", df_in.columns)
     
-    if st.button("Rozpocznij katalogowanie"):
+    if st.button("Rozpocznij proces katalogowania"):
         final_data = []
         progress_bar = st.progress(0)
         status_msg = st.empty()
         
-        # Miejsce na animację i cytat
         anim_placeholder = st.empty()
         quote_placeholder = st.empty()
         
+        # Animacja i losowy cytat
         anim_placeholder.markdown('<div class="book-container"><div class="loader-book"><div class="page"></div></div></div>', unsafe_allow_html=True)
-        quote_placeholder.markdown(f'<div class="quote-style">{random.choice(CYTATY_MONTE_CHRISTO)}<br><small>— Aleksander Dumas</small></div>', unsafe_allow_html=True)
+        quote_placeholder.markdown(f'<div class="quote-style">{random.choice(CYTATY)}</div>', unsafe_allow_html=True)
 
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
-            status_msg.text(f"Przetwarzanie: {isbn_raw}")
+            status_msg.text(f"Analiza bazy eLibri: {isbn_raw}")
             
             xml_content = get_elibri_xml(f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}", elibri_user, elibri_pass)
             book_info = parse_onix_data(xml_content) if xml_content and xml_content != "BŁĄD_AUTH" else None
@@ -134,7 +146,7 @@ if uploaded_file:
             headers = ["Tytuł", "Autorzy", "Data premiery", "Język", "Kategorie", "Wydawca", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"]
             
             for h in headers:
-                entry[h] = book_info.get(h, "Brak") if book_info else "Nie znaleziono"
+                entry[h] = book_info.get(h, "Brak") if book_info else "Nie odnaleziono"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
@@ -143,11 +155,17 @@ if uploaded_file:
         anim_placeholder.empty()
         quote_placeholder.empty()
         st.session_state.results_df = pd.DataFrame(final_data)
-        st.success("Katalogowanie zakończone!")
+        st.success("Katalogowanie zakończone. Wyniki gotowe do pobrania.")
 
 if st.session_state.results_df is not None:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    st.download_button("📥 Pobierz Rejestr Excel", buf.getvalue(), "rejestr_elibri.xlsx")
+    
+    st.download_button(
+        label="📥 Pobierz wyniki do Excela",
+        data=buf.getvalue(),
+        file_name="rejestr_biblioteczny.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     st.dataframe(st.session_state.results_df)
