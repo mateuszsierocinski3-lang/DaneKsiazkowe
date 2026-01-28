@@ -12,24 +12,32 @@ st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="wide")
 # --- NAMESPACE ONIX ---
 NS = {'onix': 'http://ns.editeur.org/onix/3.1/reference'}
 
+# --- MAPOWANIE JĘZYKÓW ---
+LANG_MAP = {
+    'pol': 'polski',
+    'eng': 'angielski',
+    'ger': 'niemiecki',
+    'fre': 'francuski',
+    'rus': 'rosyjski',
+    'ita': 'włoski',
+    'spa': 'hiszpański'
+}
+
 # --- FUNKCJA ODWRACANIA AUTORÓW ---
 def reverse_authors(authors_str):
     if not authors_str or authors_str in ["Nieznany", "Brak", "Błąd danych"]:
         return authors_str
     
-    # Rozdzielamy autorów po przecinku (jeśli jest ich kilku)
     individual_authors = [a.strip() for a in authors_str.split(',')]
     reversed_list = []
     
     for author in individual_authors:
         parts = author.split()
         if len(parts) >= 2:
-            # Zakładamy, że ostatni człon to nazwisko, a reszta to imiona
             last_name = parts[-1]
             first_names = " ".join(parts[:-1])
             reversed_list.append(f"{last_name} {first_names}")
         else:
-            # Jeśli jest tylko jeden człon (np. pseudonim), zostawiamy bez zmian
             reversed_list.append(author)
             
     return ", ".join(reversed_list)
@@ -67,11 +75,9 @@ def parse_onix_data(xml_content):
         # 2. Tytuł
         title = get_text('.//onix:TitleDetail[onix:TitleType="01"]//onix:TitleText')
 
-        # 3. Autorzy (Oryginalni)
-        authors = []
-        for contrib in product.findall('.//onix:Contributor', NS):
-            name = get_text('onix:PersonName', contrib)
-            if name != "Brak": authors.append(name)
+        # 3. Autorzy
+        authors = [c.find('onix:PersonName', NS).text for c in product.findall('.//onix:Contributor', NS) 
+                   if c.find('onix:PersonName', NS) is not None]
         authors_str = ", ".join(authors) if authors else "Nieznany"
 
         # 4. Seria
@@ -79,7 +85,11 @@ def parse_onix_data(xml_content):
                         if s.find('.//onix:TitleText', NS) is not None]
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania (EditionStatement)
+        # 5. Język
+        lang_code = get_text('.//onix:Language[onix:LanguageRole="01"]/onix:LanguageCode')
+        language = LANG_MAP.get(lang_code.lower(), lang_code) if lang_code != "Brak" else "Brak informacji"
+
+        # 6. Opis wydania (EditionStatement)
         desc_detail = product.find('.//onix:DescriptiveDetail', NS)
         edition_display = "Brak informacji"
         if desc_detail is not None:
@@ -91,7 +101,16 @@ def parse_onix_data(xml_content):
                 if ed_num == "1": edition_display = "Pierwsze"
                 elif ed_num != "Brak": edition_display = f"Wydanie {ed_num}"
 
-        # 6. Pozostałe pola
+        # 7. Okładka (Link do zdjęcia)
+        cover_url = "Brak linku"
+        # Szukamy w SupportingResource, typ 01 (Front cover)
+        for res in product.findall('.//onix:SupportingResource', NS):
+            if get_text('onix:ResourceContentType', res) == "01":
+                link_node = res.find('.//onix:ResourceLink', NS)
+                if link_node is not None:
+                    cover_url = link_node.text.strip()
+
+        # 8. Pozostałe
         description = "Brak opisu"
         text_content = product.find('.//onix:TextContent[onix:TextType="03"]/onix:Text', NS)
         if text_content is not None:
@@ -99,19 +118,19 @@ def parse_onix_data(xml_content):
             description = re.sub('<[^<]+?>', '', raw_html).strip()
 
         publisher = get_text('.//onix:Publisher/onix:PublisherName')
-        imprint = get_text('.//onix:Imprint/onix:ImprintName')
         pages = get_text('.//onix:Extent[onix:ExtentType="00"]/onix:ExtentValue')
         
         return {
             "Tytuł": title,
             "Autorzy": authors_str,
+            "Język": language,
             "Seria": series_str,
             "Opis wydania": edition_display,
             "Wydawca": publisher,
-            "Imprint": imprint,
             "Liczba stron": pages,
             "ISBN-13": isbn13,
-            "Opis": description[:500] + "..." if len(description) > 500 else description
+            "Opis": description[:500] + "..." if len(description) > 500 else description,
+            "Link do okładki": cover_url
         }
     except Exception:
         return None
@@ -122,7 +141,7 @@ with st.sidebar:
     elibri_user = st.text_input("Username (API)", value="empik")
     elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
 
-st.title("📖 Bibliotekarz (ONIX Parser)")
+st.title("📖 Bibliotekarz")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel", type=["xlsx"])
 
@@ -141,19 +160,20 @@ if uploaded_file:
             book_info = parse_onix_data(xml_res) if xml_res and xml_res != "BŁĄD_AUTH" else None
             
             entry = {"Identyfikator": isbn}
-            headers = ["Tytuł", "Autorzy", "Seria", "Opis wydania", "Wydawca", "Imprint", "Liczba stron", "ISBN-13", "Opis"]
+            headers = ["Tytuł", "Autorzy", "Język", "Seria", "Opis wydania", "Wydawca", "Liczba stron", "ISBN-13", "Opis", "Link do okładki"]
             
             for h in headers:
                 entry[h] = book_info.get(h, "Nie znaleziono") if book_info else "Błąd danych"
             
-            # --- DODANIE ODWRÓCONYCH AUTORÓW ---
+            # Dodanie odwróconych autorów
             entry["Autorzy (odwróceni)"] = reverse_authors(entry["Autorzy"])
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
 
-        # Reorganizacja kolumn, aby "odwróceni" byli obok oryginalnych
         res_df = pd.DataFrame(final_data)
+        
+        # Uporządkowanie kolumn (odwróceni obok oryginalnych)
         cols = list(res_df.columns)
         if "Autorzy" in cols and "Autorzy (odwróceni)" in cols:
             idx = cols.index("Autorzy")
@@ -161,11 +181,11 @@ if uploaded_file:
             res_df = res_df[cols]
 
         st.session_state.results_df = res_df
-        st.success("Gotowe!")
+        st.success("Dane pobrane pomyślnie!")
 
 if 'results_df' in st.session_state and st.session_state.results_df is not None:
     st.dataframe(st.session_state.results_df)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    st.download_button("📥 Pobierz Rejestr", buf.getvalue(), "rejestr_elibri.xlsx")
+    st.download_button("📥 Pobierz Rejestr", buf.getvalue(), "rejestr_bibliotekarz.xlsx")
