@@ -14,13 +14,8 @@ NS = {'onix': 'http://ns.editeur.org/onix/3.1/reference'}
 
 # --- MAPOWANIE JĘZYKÓW ---
 LANG_MAP = {
-    'pol': 'polski',
-    'eng': 'angielski',
-    'ger': 'niemiecki',
-    'fre': 'francuski',
-    'rus': 'rosyjski',
-    'ita': 'włoski',
-    'spa': 'hiszpański'
+    'pol': 'polski', 'eng': 'angielski', 'ger': 'niemiecki',
+    'fre': 'francuski', 'rus': 'rosyjski', 'ita': 'włoski', 'spa': 'hiszpański'
 }
 
 # --- FUNKCJA ODWRACANIA AUTORÓW ---
@@ -101,16 +96,21 @@ def parse_onix_data(xml_content):
                 if ed_num == "1": edition_display = "Pierwsze"
                 elif ed_num != "Brak": edition_display = f"Wydanie {ed_num}"
 
-        # 7. Okładka (Link do zdjęcia)
+        # 7. Data Premiery (NOWE/PRZYWRÓCONE)
+        pub_date_raw = get_text('.//onix:PublishingDate[onix:PublishingDateRole="01"]/onix:Date')
+        if pub_date_raw != "Brak" and len(pub_date_raw) == 8:
+            pub_date = f"{pub_date_raw[:4]}-{pub_date_raw[4:6]}-{pub_date_raw[6:]}"
+        else:
+            pub_date = pub_date_raw
+
+        # 8. Okładka
         cover_url = "Brak linku"
-        # Szukamy w SupportingResource, typ 01 (Front cover)
         for res in product.findall('.//onix:SupportingResource', NS):
             if get_text('onix:ResourceContentType', res) == "01":
                 link_node = res.find('.//onix:ResourceLink', NS)
-                if link_node is not None:
-                    cover_url = link_node.text.strip()
+                if link_node is not None: cover_url = link_node.text.strip()
 
-        # 8. Pozostałe
+        # 9. Pozostałe
         description = "Brak opisu"
         text_content = product.find('.//onix:TextContent[onix:TextType="03"]/onix:Text', NS)
         if text_content is not None:
@@ -126,6 +126,7 @@ def parse_onix_data(xml_content):
             "Język": language,
             "Seria": series_str,
             "Opis wydania": edition_display,
+            "Data premiery": pub_date,
             "Wydawca": publisher,
             "Liczba stron": pages,
             "ISBN-13": isbn13,
@@ -153,6 +154,9 @@ if uploaded_file:
         final_data = []
         progress_bar = st.progress(0)
         
+        # Definicja nagłówków do zapisu
+        headers = ["Tytuł", "Autorzy", "Język", "Seria", "Opis wydania", "Data premiery", "Wydawca", "Liczba stron", "ISBN-13", "Opis", "Link do okładki"]
+        
         for i, row in df_in.iterrows():
             isbn = str(row[target_col]).split('.')[0].strip()
             xml_res = get_elibri_xml(f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}", elibri_user, elibri_pass)
@@ -160,20 +164,16 @@ if uploaded_file:
             book_info = parse_onix_data(xml_res) if xml_res and xml_res != "BŁĄD_AUTH" else None
             
             entry = {"Identyfikator": isbn}
-            headers = ["Tytuł", "Autorzy", "Język", "Seria", "Opis wydania", "Wydawca", "Liczba stron", "ISBN-13", "Opis", "Link do okładki"]
-            
             for h in headers:
                 entry[h] = book_info.get(h, "Nie znaleziono") if book_info else "Błąd danych"
             
-            # Dodanie odwróconych autorów
             entry["Autorzy (odwróceni)"] = reverse_authors(entry["Autorzy"])
-            
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
 
         res_df = pd.DataFrame(final_data)
         
-        # Uporządkowanie kolumn (odwróceni obok oryginalnych)
+        # Kolejność kolumn: Autorzy (odwróceni) zaraz po Autorzy
         cols = list(res_df.columns)
         if "Autorzy" in cols and "Autorzy (odwróceni)" in cols:
             idx = cols.index("Autorzy")
@@ -181,7 +181,7 @@ if uploaded_file:
             res_df = res_df[cols]
 
         st.session_state.results_df = res_df
-        st.success("Dane pobrane pomyślnie!")
+        st.success("Dane pobrane!")
 
 if 'results_df' in st.session_state and st.session_state.results_df is not None:
     st.dataframe(st.session_state.results_df)
