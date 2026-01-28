@@ -168,4 +168,13 @@ if uploaded_file:
         if "Autorzy" in res_df.columns:
             cols = list(res_df.columns)
             idx = cols.index("Autorzy")
-            cols.insert(idx + 1
+            cols.insert(idx + 1, cols.pop(cols.index("Autorzy (odwróceni)")))
+            res_df = res_df[cols]
+            
+        st.session_state.results_df = res_df
+        st.dataframe(res_df)
+        
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
+            res_df.to_excel(writer, index=False)
+        st.download_button("📥 Pobierz wynikowy Excel", buf.getvalue(), "rejestr_bibliotekarz.xlsx")
