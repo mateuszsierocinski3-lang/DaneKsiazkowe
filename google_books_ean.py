@@ -37,23 +37,23 @@ def reverse_authors(authors_str):
             
     return ", ".join(reversed_list)
 
-# --- CACHE I DIAGNOSTYKA POŁĄCZENIA ---
+# --- POBIERANIE XML Z DIAGNOSTYKĄ ---
 @st.cache_data(ttl=3600)
-def get_elibri_xml_debug(url, username, password):
+def get_elibri_xml(url, username, password):
     try:
         r = requests.get(url, auth=(username, password), timeout=15)
         if r.status_code == 200:
             return {"status": "OK", "content": r.content}
         elif r.status_code == 401:
-            return {"status": "BŁĄD_AUTORYZACJI", "content": None}
+            return {"status": "BŁĄD_AUTORYZACJI (401)", "content": None}
         elif r.status_code == 403:
-            return {"status": "ZABLOKOWANY_DOSTĘP_403", "content": None}
+            return {"status": "DOSTĘP_ZABLOKOWANY (403)", "content": None}
         else:
             return {"status": f"BŁĄD_HTTP_{r.status_code}", "content": None}
     except Exception as e:
         return {"status": f"BŁĄD_POŁĄCZENIA: {str(e)}", "content": None}
 
-# --- PARSER ONIX ---
+# --- PARSER ONIX (Pancerny) ---
 def parse_onix_data(xml_content):
     try:
         root = ET.fromstring(xml_content)
@@ -119,7 +119,7 @@ def parse_onix_data(xml_content):
         return None
 
 # --- UI ---
-st.title("📖 Bibliotekarz (Pancerny Parser)")
+st.title("📖 Bibliotekarz")
 
 with st.sidebar:
     st.header("🔑 Autoryzacja")
@@ -140,36 +140,32 @@ if uploaded_file:
         headers = ["Tytuł", "Autorzy", "Język", "Seria", "Opis wydania", "Data premiery", "Wydawca", "Liczba stron", "ISBN-13", "Link do okładki"]
         
         for i, row in df_in.iterrows():
-            # Agresywne czyszczenie ISBN
+            # Czyszczenie ISBN (same cyfry)
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             isbn = "".join(filter(str.isdigit, isbn_raw))
             
-            res = get_elibri_xml_debug(f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}", elibri_user, elibri_pass)
+            res = get_elibri_xml(f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}", elibri_user, elibri_pass)
             
             if res["status"] != "OK":
-                status_msg.error(f"Problem: {res['status']} dla ISBN: {isbn}")
-                if "AUTORYZACJI" in res["status"]: st.stop()
+                status_msg.error(f"Problemy z połączeniem: {res['status']}")
             
             info = parse_onix_data(res["content"]) if res["content"] else None
             
             entry = {"ISBN wejściowy": isbn}
             for h in headers:
-                entry[h] = info.get(h, "Brak danych") if info else f"Błąd: {res['status']}"
+                if info:
+                    entry[h] = info.get(h, "Brak danych")
+                else:
+                    entry[h] = f"Błąd: {res['status']}"
             
             entry["Autorzy (odwróceni)"] = reverse_authors(entry.get("Autorzy", ""))
             final_data.append(entry)
             progress.progress((i + 1) / len(df_in))
 
         res_df = pd.DataFrame(final_data)
+        
+        # Przesunięcie kolumny 'Autorzy (odwróceni)' obok 'Autorzy'
         if "Autorzy" in res_df.columns:
             cols = list(res_df.columns)
-            cols.insert(cols.index("Autorzy") + 1, cols.pop(cols.index("Autorzy (odwróceni)")))
-            res_df = res_df[cols]
-            
-        st.session_state.results_df = res_df
-        st.dataframe(res_df)
-        
-        buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
-            res_df.to_excel(writer, index=False)
-        st.download_button("Pobierz wynik", buf.getvalue(), "rejestr_bibliotekarz.xlsx")
+            idx = cols.index("Autorzy")
+            cols.insert(idx + 1
