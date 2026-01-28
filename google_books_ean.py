@@ -7,40 +7,57 @@ import io
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="wide")
+st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# Funkcja pomocnicza do bezpiecznego pobierania tekstu z zagnieżdżonych struktur
-def find_text(parent, path, ns=None):
-    node = parent.find(path, ns)
+# --- FUNKCJE POMOCNICZE ---
+
+def reverse_authors(authors_str):
+    """Zamienia 'Imię Nazwisko' na 'Nazwisko Imię' dla każdego autora na liście."""
+    if not authors_str or authors_str in ["Nieznany", "Brak", "Błąd danych"]:
+        return authors_str
+    
+    parts = authors_str.split(",")  # Rozdzielamy autorów
+    reversed_parts = []
+    
+    for part in parts:
+        name_atoms = part.strip().split()
+        if len(name_atoms) >= 2:
+            # Zakładamy, że ostatni człon to nazwisko, reszta to imiona
+            last_name = name_atoms[-1]
+            first_names = " ".join(name_atoms[:-1])
+            reversed_parts.append(f"{last_name} {first_names}")
+        else:
+            # Jeśli jest tylko jeden człon (np. pseudonim), zostawiamy jak jest
+            reversed_parts.append(part.strip())
+            
+    return ", ".join(reversed_parts)
+
+def find_text(parent, path):
+    """Bezpieczne pobieranie tekstu z węzła XML."""
+    node = parent.find(path)
     return node.text.strip() if node is not None and node.text else None
 
 # --- PARSER ONIX ---
 def parse_onix_data(xml_content):
     try:
-        # eLibri czasem zwraca XML z zadeklarowanym namespace, a czasem bez.
-        # Obsłużymy oba przypadki usuwając namespace dla ułatwienia parsowania.
+        # Dekodowanie i czyszczenie XML z przestrzeni nazw (Namespace), co ułatwia dostęp przez find()
         xml_content_str = xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content
-        # Usuwamy deklaracje xmlns, aby xpath był prostszy
         xml_content_str = re.sub(r'\sxmlns="[^"]+"', '', xml_content_str, count=1)
-        root = ET.fromstring(xml_content_str)
         
-        # Szukamy produktu (może być rootem lub wewnątrz paczki ONIXMessage)
+        root = ET.fromstring(xml_content_str)
         product = root if root.tag == 'Product' else root.find('.//Product')
         if product is None: return None
 
-        # 1. Identyfikatory (ISBN-13)
-        isbn13 = "Nie znaleziono"
+        # 1. Identyfikatory
+        isbn13 = "Brak"
         for ident in product.findall('.//ProductIdentifier'):
             if find_text(ident, 'ProductIDType') == "15":
                 isbn13 = find_text(ident, 'IDValue')
 
-        # 2. Tytuł (zgodnie z Twoim XML: TitleDetail -> TitleElement -> TitleText)
-        title = "Brak tytułu"
-        title_detail = product.find('.//TitleDetail[TitleType="01"]')
-        if title_detail is not None:
-            title = find_text(title_detail, './/TitleText')
+        # 2. Tytuł (TitleDetail -> TitleElement -> TitleText)
+        title = find_text(product, './/TitleDetail[TitleType="01"]//TitleText') or "Brak tytułu"
 
-        # 3. Autorzy
+        # 3. Autorzy (Oryginalni)
         authors = []
         for contrib in product.findall('.//Contributor'):
             name = find_text(contrib, 'PersonName')
@@ -48,38 +65,38 @@ def parse_onix_data(xml_content):
         authors_str = ", ".join(authors) if authors else "Nieznany"
 
         # 4. Seria Wydawnicza
-        series = []
-        for coll in product.findall('.//Collection'):
-            s_name = find_text(coll, './/TitleText')
-            if s_name: series.append(s_name)
-        series_str = ", ".join(series) if series else "Brak serii"
+        series_names = []
+        for series in product.findall('.//Collection'):
+            s_title = find_text(series, './/TitleText')
+            if s_title: series_names.append(s_title)
+        series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania i Liczba stron
+        # 5. Opis wydania i strony
         desc_detail = product.find('DescriptiveDetail')
-        edition = "Brak"
+        edition_display = "Brak"
         pages = "Brak"
         if desc_detail is not None:
-            edition = find_text(desc_detail, 'EditionStatement') or "1"
-            if edition == "1": edition = "Pierwsze"
+            ed_stat = find_text(desc_detail, 'EditionStatement')
+            if ed_stat:
+                edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
             
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
 
-        # 6. Opis (CollateralDetail -> TextContent -> Text)
+        # 6. Opis (z CDATA i HTML)
         description = "Brak opisu"
-        text_node = product.find('.//TextContent[TextType="03"]/Text')
-        if text_node is not None:
-            # Pobieramy tekst (w tym CDATA)
-            raw_text = text_node.text or ""
-            description = re.sub('<[^<]+?>', '', raw_text).strip()
+        text_content = product.find('.//TextContent[TextType="03"]/Text')
+        if text_content is not None:
+            raw_html = text_content.text or ""
+            description = re.sub('<[^<]+?>', '', raw_html).strip()
 
-        # 7. Okładka (ResourceLink)
+        # 7. Okładka
         cover_url = "Brak okładki"
         res_link = product.find('.//SupportingResource[ResourceContentType="01"]//ResourceLink')
-        if res_link is not None:
+        if res_link is not None: 
             cover_url = res_link.text
 
         # 8. Wydawca i Cena
-        pub_name = find_text(product, './/Publisher/PublisherName') or "Brak"
+        publisher = find_text(product, './/Publisher/PublisherName') or "Brak"
         imprint = find_text(product, './/Imprint/ImprintName') or "Brak"
         
         price_node = product.find('.//Price[PriceType="02"]')
@@ -92,73 +109,86 @@ def parse_onix_data(xml_content):
         return {
             "Tytuł": title,
             "Autorzy": authors_str,
+            "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
             "Seria": series_str,
-            "Opis wydania": edition,
-            "Wydawca": pub_name,
+            "Opis wydania": edition_display,
+            "Wydawca": publisher,
             "Imprint": imprint,
             "Liczba stron": pages,
             "ISBN-13": isbn13,
             "Cena": price_str,
-            "Opis": (description[:500] + "...") if len(description) > 500 else description,
+            "Opis": description[:500] + "..." if len(description) > 500 else description,
             "Link do okładki": cover_url
         }
-    except Exception as e:
-        st.error(f"Błąd parsowania: {e}")
+    except Exception:
         return None
 
-# --- UI (Pozostała część bez zmian, poza drobną korektą w pętli) ---
+# --- UI STREAMLIT ---
 with st.sidebar:
     st.header("🔑 Autoryzacja eLibri")
     elibri_user = st.text_input("Username (API)", value="empik")
     elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
+    st.info("Skrypt automatycznie odwraca kolejność imion i nazwisk w dodatkowej kolumnie.")
 
-st.title("📖 Bibliotekarz v2 (ONIX Parser)")
+st.title("📖 Bibliotekarz ONIX (eLibri)")
 
-uploaded_file = st.file_uploader("Załaduj plik Excel z ISBNami", type=["xlsx"])
+uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
 
 if uploaded_file:
     df_in = pd.read_excel(uploaded_file)
-    target_col = st.selectbox("Wybierz kolumnę zawierającą ISBN:", df_in.columns)
+    target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
-    if st.button("Rozpocznij pobieranie danych"):
+    if st.button("Pobierz dane z API"):
         final_data = []
         progress_bar = st.progress(0)
         
-        # Cache dla API (funkcja z oryginalnego skryptu st.cache_data)
-        @st.cache_data(ttl=3600)
-        def fetch_xml(isbn, user, pwd):
-            url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}"
-            try:
-                r = requests.get(url, auth=(user, pwd), timeout=10)
-                return r.content if r.status_code == 200 else None
-            except: return None
-
+        # Nagłówki w docelowej kolejności
+        headers = [
+            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Seria", 
+            "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
+            "ISBN-13", "Cena", "Opis", "Link do okładki"
+        ]
+        
         for i, row in df_in.iterrows():
-            isbn = str(row[target_col]).replace('.0', '').strip()
-            xml_content = fetch_xml(isbn, elibri_user, elibri_pass)
+            # Czyszczenie ISBN (usuwanie .0 jeśli Excel zamienił na float)
+            isbn_raw = str(row[target_col]).split('.')[0].strip()
             
-            book_info = parse_onix_data(xml_content) if xml_content else None
+            # Zapytanie API
+            url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
+            try:
+                r = requests.get(url, auth=(elibri_user, elibri_pass), timeout=10)
+                xml_res = r.content if r.status_code == 200 else None
+            except:
+                xml_res = None
             
-            entry = {"ISBN wejściowy": isbn}
-            headers = ["Tytuł", "Autorzy", "Seria", "Opis wydania", "Wydawca", "Imprint", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"]
+            book_info = parse_onix_data(xml_res) if xml_res else None
             
+            entry = {"Identyfikator": isbn_raw}
             if book_info:
                 for h in headers:
-                    entry[h] = book_info.get(h, "Brak danych")
+                    entry[h] = book_info.get(h, "Brak")
             else:
                 for h in headers:
-                    entry[h] = "Nie znaleziono w eLibri"
+                    entry[h] = "Nie znaleziono / Błąd"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.1)
+            time.sleep(0.05) # Mały delay dla stabilności
 
         st.session_state.results_df = pd.DataFrame(final_data)
-        st.success("Zakończono pobieranie!")
+        st.success("Dane zostały pobrane!")
 
 if 'results_df' in st.session_state:
+    st.subheader("Podgląd danych")
     st.dataframe(st.session_state.results_df)
+    
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    st.download_button("📥 Pobierz Rejestr (XLSX)", buf.getvalue(), "rejestr_elibri.xlsx")
+    
+    st.download_button(
+        label="📥 Pobierz gotowy plik Excel",
+        data=buf.getvalue(),
+        file_name="rejestr_ksiazek_elibri.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
