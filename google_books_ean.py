@@ -7,7 +7,7 @@ import io
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="wide")
+st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
 # --- NAMESPACE ONIX ---
 NS = {'onix': 'http://ns.editeur.org/onix/3.1/reference'}
@@ -20,7 +20,7 @@ LANG_MAP = {
 
 # --- FUNKCJA ODWRACANIA AUTORÓW ---
 def reverse_authors(authors_str):
-    if not authors_str or authors_str in ["Nieznany", "Brak", "Błąd danych"]:
+    if not authors_str or authors_str in ["Nieznany", "Brak", "Błąd danych", "Brak ISBN w bazie eLibri"]:
         return authors_str
     
     individual_authors = [a.strip() for a in authors_str.split(',')]
@@ -37,22 +37,32 @@ def reverse_authors(authors_str):
             
     return ", ".join(reversed_list)
 
-# --- CACHE ---
+# --- CACHE I POBIERANIE Z DIAGNOSTYKĄ ---
 @st.cache_data(ttl=3600)
 def get_elibri_xml(url, username, password):
     try:
-        r = requests.get(url, auth=(username, password), timeout=10)
+        r = requests.get(url, auth=(username, password), timeout=15)
         if r.status_code == 200:
             return r.content
         elif r.status_code == 401:
-            return "BŁĄD_AUTH"
-    except Exception:
-        return None
-    return None
+            return "BŁĄD_AUTORYZACJI"
+        elif r.status_code == 404:
+            return "NIE_ZNALEZIONO"
+        elif r.status_code == 429:
+            return "BŁĄD_LIMITU_ZAPYTAŃ"
+        else:
+            return f"BŁĄD_HTTP_{r.status_code}"
+    except requests.exceptions.ConnectionError:
+        return "BŁĄD_POŁĄCZENIA_SIECIOWEGO"
+    except Exception as e:
+        return f"BŁĄD_SYSTEMOWY: {str(e)}"
 
 # --- PARSER ONIX ---
 def parse_onix_data(xml_content):
     try:
+        if not xml_content or isinstance(xml_content, str):
+            return None
+            
         root = ET.fromstring(xml_content)
         product = root.find('.//onix:Product', NS)
         if product is None: return None
@@ -84,7 +94,7 @@ def parse_onix_data(xml_content):
         lang_code = get_text('.//onix:Language[onix:LanguageRole="01"]/onix:LanguageCode')
         language = LANG_MAP.get(lang_code.lower(), lang_code) if lang_code != "Brak" else "Brak informacji"
 
-        # 6. Opis wydania (EditionStatement)
+        # 6. Opis wydania
         desc_detail = product.find('.//onix:DescriptiveDetail', NS)
         edition_display = "Brak informacji"
         if desc_detail is not None:
@@ -96,12 +106,9 @@ def parse_onix_data(xml_content):
                 if ed_num == "1": edition_display = "Pierwsze"
                 elif ed_num != "Brak": edition_display = f"Wydanie {ed_num}"
 
-        # 7. Data Premiery (NOWE/PRZYWRÓCONE)
+        # 7. Data Premiery
         pub_date_raw = get_text('.//onix:PublishingDate[onix:PublishingDateRole="01"]/onix:Date')
-        if pub_date_raw != "Brak" and len(pub_date_raw) == 8:
-            pub_date = f"{pub_date_raw[:4]}-{pub_date_raw[4:6]}-{pub_date_raw[6:]}"
-        else:
-            pub_date = pub_date_raw
+        pub_date = f"{pub_date_raw[:4]}-{pub_date_raw[4:6]}-{pub_date_raw[6:]}" if len(pub_date_raw) == 8 else pub_date_raw
 
         # 8. Okładka
         cover_url = "Brak linku"
@@ -133,8 +140,8 @@ def parse_onix_data(xml_content):
             "Opis": description[:500] + "..." if len(description) > 500 else description,
             "Link do okładki": cover_url
         }
-    except Exception:
-        return None
+    except Exception as e:
+        return {"BŁĄD_PARSERA": str(e)}
 
 # --- UI ---
 with st.sidebar:
@@ -153,27 +160,49 @@ if uploaded_file:
     if st.button("Rozpocznij proces"):
         final_data = []
         progress_bar = st.progress(0)
+        status_text = st.empty()
         
-        # Definicja nagłówków do zapisu
         headers = ["Tytuł", "Autorzy", "Język", "Seria", "Opis wydania", "Data premiery", "Wydawca", "Liczba stron", "ISBN-13", "Opis", "Link do okładki"]
         
         for i, row in df_in.iterrows():
-            isbn = str(row[target_col]).split('.')[0].strip()
+            # CZYSZCZENIE ISBN
+            raw_val = str(row[target_col]).split('.')[0]
+            isbn = re.sub(r'\D', '', raw_val).strip()
+            
+            status_text.text(f"Przetwarzanie ISBN: {isbn} ({i+1}/{len(df_in)})")
+            
+            # POBIERANIE
             xml_res = get_elibri_xml(f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}", elibri_user, elibri_pass)
             
-            book_info = parse_onix_data(xml_res) if xml_res and xml_res != "BŁĄD_AUTH" else None
-            
+            book_info = None
+            error_msg = None
+
+            if isinstance(xml_res, str) and ("BŁĄD" in xml_res or "NIE_ZNALEZIONO" in xml_res):
+                error_msg = "Brak ISBN w bazie" if xml_res == "NIE_ZNALEZIONO" else xml_res
+            else:
+                book_info = parse_onix_data(xml_res)
+                if book_info is None:
+                    error_msg = "Błąd danych XML"
+                elif "BŁĄD_PARSERA" in book_info:
+                    error_msg = f"Błąd parsera: {book_info['BŁĄD_PARSERA']}"
+
+            # BUDOWANIE REKORDU
             entry = {"Identyfikator": isbn}
-            for h in headers:
-                entry[h] = book_info.get(h, "Nie znaleziono") if book_info else "Błąd danych"
+            if error_msg:
+                for h in headers: entry[h] = error_msg
+                entry["Autorzy (odwróceni)"] = error_msg
+            else:
+                for h in headers:
+                    entry[h] = book_info.get(h, "Brak danych")
+                entry["Autorzy (odwróceni)"] = reverse_authors(entry["Autorzy"])
             
-            entry["Autorzy (odwróceni)"] = reverse_authors(entry["Autorzy"])
             final_data.append(entry)
+            time.sleep(0.1) # Anty-blokada
             progress_bar.progress((i + 1) / len(df_in))
 
         res_df = pd.DataFrame(final_data)
         
-        # Kolejność kolumn: Autorzy (odwróceni) zaraz po Autorzy
+        # Kolejność kolumn
         cols = list(res_df.columns)
         if "Autorzy" in cols and "Autorzy (odwróceni)" in cols:
             idx = cols.index("Autorzy")
@@ -181,7 +210,7 @@ if uploaded_file:
             res_df = res_df[cols]
 
         st.session_state.results_df = res_df
-        st.success("Dane pobrane!")
+        status_text.success("Dane pobrane!")
 
 if 'results_df' in st.session_state and st.session_state.results_df is not None:
     st.dataframe(st.session_state.results_df)
