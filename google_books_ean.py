@@ -16,18 +16,16 @@ def reverse_authors(authors_str):
     if not authors_str or authors_str in ["Nieznany", "Brak", "Błąd danych"]:
         return authors_str
     
-    parts = authors_str.split(",")  # Rozdzielamy autorów
+    parts = authors_str.split(",") 
     reversed_parts = []
     
     for part in parts:
         name_atoms = part.strip().split()
         if len(name_atoms) >= 2:
-            # Zakładamy, że ostatni człon to nazwisko, reszta to imiona
             last_name = name_atoms[-1]
             first_names = " ".join(name_atoms[:-1])
             reversed_parts.append(f"{last_name} {first_names}")
         else:
-            # Jeśli jest tylko jeden człon (np. pseudonim), zostawiamy jak jest
             reversed_parts.append(part.strip())
             
     return ", ".join(reversed_parts)
@@ -37,10 +35,15 @@ def find_text(parent, path):
     node = parent.find(path)
     return node.text.strip() if node is not None and node.text else None
 
+def format_date(date_str):
+    """Formatuje datę z YYYYMMDD na YYYY-MM-DD."""
+    if date_str and len(date_str) >= 8 and date_str.isdigit():
+        return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+    return date_str
+
 # --- PARSER ONIX ---
 def parse_onix_data(xml_content):
     try:
-        # Dekodowanie i czyszczenie XML z przestrzeni nazw (Namespace), co ułatwia dostęp przez find()
         xml_content_str = xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content
         xml_content_str = re.sub(r'\sxmlns="[^"]+"', '', xml_content_str, count=1)
         
@@ -49,15 +52,12 @@ def parse_onix_data(xml_content):
         if product is None: return None
 
         # 1. Identyfikatory
-        isbn13 = "Brak"
-        for ident in product.findall('.//ProductIdentifier'):
-            if find_text(ident, 'ProductIDType') == "15":
-                isbn13 = find_text(ident, 'IDValue')
+        isbn13 = find_text(product, './/ProductIdentifier[ProductIDType="15"]/IDValue') or "Brak"
 
-        # 2. Tytuł (TitleDetail -> TitleElement -> TitleText)
+        # 2. Tytuł
         title = find_text(product, './/TitleDetail[TitleType="01"]//TitleText') or "Brak tytułu"
 
-        # 3. Autorzy (Oryginalni)
+        # 3. Autorzy
         authors = []
         for contrib in product.findall('.//Contributor'):
             name = find_text(contrib, 'PersonName')
@@ -79,23 +79,26 @@ def parse_onix_data(xml_content):
             ed_stat = find_text(desc_detail, 'EditionStatement')
             if ed_stat:
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
-            
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
 
-        # 6. Opis (z CDATA i HTML)
+        # 6. Data Premiery (NOWOŚĆ)
+        pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
+        release_date = format_date(pub_date_raw) or "Brak daty"
+
+        # 7. Opis
         description = "Brak opisu"
         text_content = product.find('.//TextContent[TextType="03"]/Text')
         if text_content is not None:
             raw_html = text_content.text or ""
             description = re.sub('<[^<]+?>', '', raw_html).strip()
 
-        # 7. Okładka
+        # 8. Okładka
         cover_url = "Brak okładki"
         res_link = product.find('.//SupportingResource[ResourceContentType="01"]//ResourceLink')
         if res_link is not None: 
             cover_url = res_link.text
 
-        # 8. Wydawca i Cena
+        # 9. Wydawca i Cena
         publisher = find_text(product, './/Publisher/PublisherName') or "Brak"
         imprint = find_text(product, './/Imprint/ImprintName') or "Brak"
         
@@ -110,6 +113,7 @@ def parse_onix_data(xml_content):
             "Tytuł": title,
             "Autorzy": authors_str,
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
+            "Data premiery": release_date,
             "Seria": series_str,
             "Opis wydania": edition_display,
             "Wydawca": publisher,
@@ -128,7 +132,6 @@ with st.sidebar:
     st.header("🔑 Autoryzacja eLibri")
     elibri_user = st.text_input("Username (API)", value="empik")
     elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
-    st.info("Skrypt automatycznie odwraca kolejność imion i nazwisk w dodatkowej kolumnie.")
 
 st.title("📖 Bibliotekarz ONIX (eLibri)")
 
@@ -142,18 +145,15 @@ if uploaded_file:
         final_data = []
         progress_bar = st.progress(0)
         
-        # Nagłówki w docelowej kolejności
         headers = [
-            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Seria", 
+            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Data premiery", "Seria", 
             "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
             "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
         for i, row in df_in.iterrows():
-            # Czyszczenie ISBN (usuwanie .0 jeśli Excel zamienił na float)
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             
-            # Zapytanie API
             url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
                 r = requests.get(url, auth=(elibri_user, elibri_pass), timeout=10)
@@ -169,26 +169,18 @@ if uploaded_file:
                     entry[h] = book_info.get(h, "Brak")
             else:
                 for h in headers:
-                    entry[h] = "Nie znaleziono / Błąd"
+                    entry[h] = "Błąd / Nie znaleziono"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.05) # Mały delay dla stabilności
+            time.sleep(0.05)
 
         st.session_state.results_df = pd.DataFrame(final_data)
         st.success("Dane zostały pobrane!")
 
 if 'results_df' in st.session_state:
-    st.subheader("Podgląd danych")
     st.dataframe(st.session_state.results_df)
-    
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    
-    st.download_button(
-        label="📥 Pobierz gotowy plik Excel",
-        data=buf.getvalue(),
-        file_name="rejestr_ksiazek_elibri.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx")
