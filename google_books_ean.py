@@ -7,7 +7,6 @@ import io
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
-# Zmieniono nazwę na "Bibliotekarz"
 st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="wide")
 
 # --- NAMESPACE ONIX ---
@@ -54,23 +53,32 @@ def parse_onix_data(xml_content):
             if name != "Brak": authors.append(name)
         authors_str = ", ".join(authors) if authors else "Nieznany"
 
-        # 4. NOWE: Seria Wydawnicza
+        # 4. Seria Wydawnicza
         series_names = []
         for series in product.findall('.//onix:Collection', NS):
-            # Szukamy tytułu kolekcji/serii
             s_title = series.find('.//onix:TitleText', NS)
             if s_title is not None:
                 series_names.append(s_title.text.strip())
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. NOWE: Wydanie (Numer i typ)
-        edition_number = get_text('onix:EditionNumber')
-        edition_statement = get_text('onix:EditionStatement')
-        full_edition = f"Wydanie {edition_number}"
-        if edition_statement != "Brak":
-            full_edition += f" ({edition_statement})"
+        # 5. Opis wydania (Logika dla "Pierwsze" i dodatkowych opisów)
+        ed_num = get_text('onix:EditionNumber')
+        ed_stat = get_text('onix:EditionStatement')
+        
+        if ed_num == "1":
+            edition_display = "Pierwsze"
+        elif ed_num != "Brak":
+            edition_display = f"{ed_num}"
+        else:
+            edition_display = ""
 
-        # 6. Opis
+        if ed_stat != "Brak":
+            edition_display = f"{edition_display} ({ed_stat})".strip()
+        
+        if not edition_display:
+            edition_display = "Brak informacji"
+
+        # 6. Opis (Tekst)
         description = "Brak opisu"
         text_content = product.find('.//onix:TextContent[onix:TextType="03"]/onix:Text', NS)
         if text_content is not None:
@@ -84,7 +92,7 @@ def parse_onix_data(xml_content):
                 link = res.find('.//onix:ResourceLink', NS)
                 if link is not None: cover_url = link.text
 
-        # 8. Wydawca i Pozostałe
+        # 8. Wydawca, Strony, Cena
         publisher = get_text('.//onix:Publisher/onix:PublisherName')
         imprint = get_text('.//onix:Imprint/onix:ImprintName')
         pages = get_text('.//onix:Extent[onix:ExtentType="00"]/onix:ExtentValue')
@@ -95,7 +103,7 @@ def parse_onix_data(xml_content):
             "Tytuł": title,
             "Autorzy": authors_str,
             "Seria": series_str,
-            "Wydanie": full_edition,
+            "Opis wydania": edition_display,
             "Wydawca": publisher,
             "Imprint": imprint,
             "Liczba stron": pages,
@@ -104,7 +112,7 @@ def parse_onix_data(xml_content):
             "Opis": description[:500] + "..." if len(description) > 500 else description,
             "Link do okładki": cover_url
         }
-    except Exception as e:
+    except Exception:
         return None
 
 # --- UI ---
@@ -113,7 +121,6 @@ with st.sidebar:
     elibri_user = st.text_input("Username (API)", value="empik")
     elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
 
-# Zmieniono nagłówek na "Bibliotekarz"
 st.title("📖 Bibliotekarz (ONIX Parser)")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel", type=["xlsx"])
@@ -129,8 +136,7 @@ if uploaded_file:
             final_data = []
             progress_bar = st.progress(0)
             
-            # Lista nagłówków do tabeli końcowej (dodano Serię i Wydanie)
-            headers = ["Tytuł", "Autorzy", "Seria", "Wydanie", "Wydawca", "Imprint", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"]
+            headers = ["Tytuł", "Autorzy", "Seria", "Opis wydania", "Wydawca", "Imprint", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"]
             
             for i, row in df_in.iterrows():
                 isbn = str(row[target_col]).split('.')[0]
