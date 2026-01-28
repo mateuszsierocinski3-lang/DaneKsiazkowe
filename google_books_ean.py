@@ -39,18 +39,15 @@ def parse_onix_data(xml_content):
         # 1. Identyfikatory
         isbn13 = "Brak"
         for ident in product.findall('.//onix:ProductIdentifier', NS):
-            id_type = get_text('onix:ProductIDType', ident)
-            if id_type == "15":
+            if get_text('onix:ProductIDType', ident) == "15":
                 isbn13 = get_text('onix:IDValue', ident)
 
         # 2. Tytuł
         title = get_text('.//onix:TitleDetail[onix:TitleType="01"]//onix:TitleText')
 
         # 3. Autorzy
-        authors = []
-        for contrib in product.findall('.//onix:Contributor', NS):
-            name = get_text('onix:PersonName', contrib)
-            if name != "Brak": authors.append(name)
+        authors = [c.find('onix:PersonName', NS).text for c in product.findall('.//onix:Contributor', NS) 
+                   if c.find('onix:PersonName', NS) is not None]
         authors_str = ", ".join(authors) if authors else "Nieznany"
 
         # 4. Seria Wydawnicza
@@ -61,24 +58,29 @@ def parse_onix_data(xml_content):
                 series_names.append(s_title.text.strip())
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania (Logika dla "Pierwsze" i dodatkowych opisów)
-        ed_num = get_text('onix:EditionNumber')
-        ed_stat = get_text('onix:EditionStatement')
+        # 5. Opis wydania (Pobieranie wartości z EditionStatement)
+        desc_detail = product.find('.//onix:DescriptiveDetail', NS)
+        edition_display = "Brak informacji"
         
-        if ed_num == "1":
-            edition_display = "Pierwsze"
-        elif ed_num != "Brak":
-            edition_display = f"{ed_num}"
-        else:
-            edition_display = ""
+        if desc_detail is not None:
+            # Pobieramy bezpośrednio to, co wydawca wpisał w EditionStatement
+            ed_stat = get_text('onix:EditionStatement', desc_detail)
+            
+            if ed_stat != "Brak":
+                # Specjalna obsługa dla pierwszego wydania (jeśli wartość to "1")
+                if ed_stat == "1":
+                    edition_display = "Pierwsze"
+                else:
+                    edition_display = ed_stat
+            else:
+                # Jeśli EditionStatement jest puste, sprawdź numer wydania jako backup
+                ed_num = get_text('onix:EditionNumber', desc_detail)
+                if ed_num == "1":
+                    edition_display = "Pierwsze"
+                elif ed_num != "Brak":
+                    edition_display = f"Wydanie {ed_num}"
 
-        if ed_stat != "Brak":
-            edition_display = f"{edition_display} ({ed_stat})".strip()
-        
-        if not edition_display:
-            edition_display = "Brak informacji"
-
-        # 6. Opis (Tekst)
+        # 6. Opis produktu
         description = "Brak opisu"
         text_content = product.find('.//onix:TextContent[onix:TextType="03"]/onix:Text', NS)
         if text_content is not None:
@@ -92,12 +94,17 @@ def parse_onix_data(xml_content):
                 link = res.find('.//onix:ResourceLink', NS)
                 if link is not None: cover_url = link.text
 
-        # 8. Wydawca, Strony, Cena
+        # 8. Wydawca i pozostałe
         publisher = get_text('.//onix:Publisher/onix:PublisherName')
         imprint = get_text('.//onix:Imprint/onix:ImprintName')
         pages = get_text('.//onix:Extent[onix:ExtentType="00"]/onix:ExtentValue')
-        price = get_text('.//onix:Price[onix:PriceType="02"]/onix:PriceAmount')
-        currency = get_text('.//onix:Price[onix:PriceType="02"]/onix:CurrencyCode')
+        
+        price_node = product.find('.//onix:Price[onix:PriceType="02"]', NS)
+        price_str = "Brak"
+        if price_node is not None:
+            amt = get_text('onix:PriceAmount', price_node)
+            cur = get_text('onix:CurrencyCode', price_node)
+            price_str = f"{amt} {cur}"
 
         return {
             "Tytuł": title,
@@ -108,7 +115,7 @@ def parse_onix_data(xml_content):
             "Imprint": imprint,
             "Liczba stron": pages,
             "ISBN-13": isbn13,
-            "Cena": f"{price} {currency}" if price != "Brak" else "Brak",
+            "Cena": price_str,
             "Opis": description[:500] + "..." if len(description) > 500 else description,
             "Link do okładki": cover_url
         }
@@ -129,7 +136,7 @@ if uploaded_file:
     df_in = pd.read_excel(uploaded_file)
     target_col = st.selectbox("Wybierz kolumnę ISBN:", df_in.columns)
     
-    if st.button("Rozpocznij pobieranie danych ONIX"):
+    if st.button("Rozpocznij pobieranie danych"):
         if not elibri_user or not elibri_pass:
             st.error("Podaj dane logowania!")
         else:
@@ -139,7 +146,7 @@ if uploaded_file:
             headers = ["Tytuł", "Autorzy", "Seria", "Opis wydania", "Wydawca", "Imprint", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"]
             
             for i, row in df_in.iterrows():
-                isbn = str(row[target_col]).split('.')[0]
+                isbn = str(row[target_col]).split('.')[0].strip()
                 xml_res = get_elibri_xml(f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}", elibri_user, elibri_pass)
                 
                 if xml_res == "BŁĄD_AUTH":
@@ -154,14 +161,13 @@ if uploaded_file:
                 
                 final_data.append(entry)
                 progress_bar.progress((i + 1) / len(df_in))
-                time.sleep(0.1)
+                time.sleep(0.05)
 
             st.session_state.results_df = pd.DataFrame(final_data)
             st.success("Skatalogowano!")
 
 if 'results_df' in st.session_state and st.session_state.results_df is not None:
     st.dataframe(st.session_state.results_df)
-    
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
