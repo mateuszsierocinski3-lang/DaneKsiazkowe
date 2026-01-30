@@ -4,12 +4,23 @@ import requests
 import time
 import re
 import io
+import html  # Dodane do obsługi encji HTML
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
 # --- FUNKCJE POMOCNICZE ---
+
+def clean_html(raw_html):
+    """Usuwa znaczniki HTML oraz dekoduje encje (np. &nbsp;)."""
+    if not raw_html:
+        return ""
+    # Usuwanie tagów HTML
+    clean_text = re.sub('<[^<]+?>', '', raw_html)
+    # Dekodowanie encji typu &oacute; na ó, &nbsp; na spację itp.
+    clean_text = html.unescape(clean_text)
+    return clean_text.strip()
 
 def reverse_authors(authors_str):
     """Zamienia 'Imię Nazwisko' na 'Nazwisko Imię' dla każdego autora na liście."""
@@ -81,16 +92,15 @@ def parse_onix_data(xml_content):
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
 
-        # 6. Data Premiery (NOWOŚĆ)
+        # 6. Data Premiery
         pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
         release_date = format_date(pub_date_raw) or "Brak daty"
 
-        # 7. Opis
+        # 7. Opis (POPRAWIONE: Pełna treść + czyszczenie)
         description = "Brak opisu"
         text_content = product.find('.//TextContent[TextType="03"]/Text')
         if text_content is not None:
-            raw_html = text_content.text or ""
-            description = re.sub('<[^<]+?>', '', raw_html).strip()
+            description = clean_html(text_content.text)
 
         # 8. Okładka
         cover_url = "Brak okładki"
@@ -121,7 +131,7 @@ def parse_onix_data(xml_content):
             "Liczba stron": pages,
             "ISBN-13": isbn13,
             "Cena": price_str,
-            "Opis": description[:500] + "..." if len(description) > 500 else description,
+            "Opis": description,
             "Link do okładki": cover_url
         }
     except Exception:
