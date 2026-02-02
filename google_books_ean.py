@@ -4,23 +4,26 @@ import requests
 import time
 import re
 import io
-import html  # Dodane do obsługi encji HTML
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- FUNKCJE POMOCNICZE ---
+# --- SŁOWNIK JĘZYKÓW ---
+LANG_MAP = {
+    "pol": "polski",
+    "eng": "angielski",
+    "ger": "niemiecki",
+    "fre": "francuski",
+    "rus": "rosyjski",
+    "ita": "włoski",
+    "spa": "hiszpański",
+    "lat": "łacina",
+    "cze": "czeski",
+    "ukr": "ukraiński"
+}
 
-def clean_html(raw_html):
-    """Usuwa znaczniki HTML oraz dekoduje encje (np. &nbsp;)."""
-    if not raw_html:
-        return ""
-    # Usuwanie tagów HTML
-    clean_text = re.sub('<[^<]+?>', '', raw_html)
-    # Dekodowanie encji typu &oacute; na ó, &nbsp; na spację itp.
-    clean_text = html.unescape(clean_text)
-    return clean_text.strip()
+# --- FUNKCJE POMOCNICZE ---
 
 def reverse_authors(authors_str):
     """Zamienia 'Imię Nazwisko' na 'Nazwisko Imię' dla każdego autora na liście."""
@@ -82,25 +85,34 @@ def parse_onix_data(xml_content):
             if s_title: series_names.append(s_title)
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania i strony
+        # 5. Opis wydania, strony i JĘZYK
         desc_detail = product.find('DescriptiveDetail')
         edition_display = "Brak"
         pages = "Brak"
+        language_display = "Brak"
+        
         if desc_detail is not None:
             ed_stat = find_text(desc_detail, 'EditionStatement')
             if ed_stat:
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
+            
+            # Pobieranie języka (LanguageRole 01 = język tekstu)
+            lang_node = desc_detail.find('.//Language[LanguageRole="01"]/LanguageCode')
+            if lang_node is not None:
+                l_code = lang_node.text.strip().lower()
+                language_display = LANG_MAP.get(l_code, l_code.upper())
 
         # 6. Data Premiery
         pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
         release_date = format_date(pub_date_raw) or "Brak daty"
 
-        # 7. Opis (POPRAWIONE: Pełna treść + czyszczenie)
+        # 7. Opis
         description = "Brak opisu"
         text_content = product.find('.//TextContent[TextType="03"]/Text')
         if text_content is not None:
-            description = clean_html(text_content.text)
+            raw_html = text_content.text or ""
+            description = re.sub('<[^<]+?>', '', raw_html).strip()
 
         # 8. Okładka
         cover_url = "Brak okładki"
@@ -123,6 +135,7 @@ def parse_onix_data(xml_content):
             "Tytuł": title,
             "Autorzy": authors_str,
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
+            "Język": language_display,
             "Data premiery": release_date,
             "Seria": series_str,
             "Opis wydania": edition_display,
@@ -131,7 +144,7 @@ def parse_onix_data(xml_content):
             "Liczba stron": pages,
             "ISBN-13": isbn13,
             "Cena": price_str,
-            "Opis": description,
+            "Opis": description[:500] + "..." if len(description) > 500 else description,
             "Link do okładki": cover_url
         }
     except Exception:
@@ -155,8 +168,9 @@ if uploaded_file:
         final_data = []
         progress_bar = st.progress(0)
         
+        # Zaktualizowana lista nagłówków z Językiem
         headers = [
-            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Data premiery", "Seria", 
+            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Data premiery", "Seria", 
             "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
             "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
