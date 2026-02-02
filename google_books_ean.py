@@ -13,7 +13,7 @@ st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide
 LANG_MAP = {
     "pol": "polski",
     "eng": "angielski",
-    "ger": "niemiecki",
+    "ger": "nieiecki",
     "fre": "francuski",
     "rus": "rosyjski",
     "ita": "włoski",
@@ -85,11 +85,12 @@ def parse_onix_data(xml_content):
             if s_title: series_names.append(s_title)
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania, strony i JĘZYK
+        # 5. Opis wydania, strony, język i KATEGORIE
         desc_detail = product.find('DescriptiveDetail')
         edition_display = "Brak"
         pages = "Brak"
         language_display = "Brak"
+        categories = []
         
         if desc_detail is not None:
             ed_stat = find_text(desc_detail, 'EditionStatement')
@@ -97,22 +98,29 @@ def parse_onix_data(xml_content):
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
             
-            # Pobieranie języka (LanguageRole 01 = język tekstu)
+            # Język
             lang_node = desc_detail.find('.//Language[LanguageRole="01"]/LanguageCode')
             if lang_node is not None:
                 l_code = lang_node.text.strip().lower()
                 language_display = LANG_MAP.get(l_code, l_code.upper())
 
+            # Kategorie (Subject) - pobieramy tekst z SubjectHeadingText
+            for subject in desc_detail.findall('.//Subject'):
+                cat_text = find_text(subject, 'SubjectHeadingText')
+                if cat_text:
+                    categories.append(cat_text)
+        
+        categories_str = " | ".join(list(dict.fromkeys(categories))) if categories else "Brak kategorii"
+
         # 6. Data Premiery
         pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
         release_date = format_date(pub_date_raw) or "Brak daty"
 
-        # 7. Opis (USUNIĘTO OGRANICZENIE ZNAKÓW)
+        # 7. Opis (Pełny, bez limitów)
         description = "Brak opisu"
         text_content = product.find('.//TextContent[TextType="03"]/Text')
         if text_content is not None:
             raw_html = text_content.text or ""
-            # Usuwanie tagów HTML dla czystego tekstu
             description = re.sub('<[^<]+?>', '', raw_html).strip()
 
         # 8. Okładka
@@ -137,6 +145,7 @@ def parse_onix_data(xml_content):
             "Autorzy": authors_str,
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
             "Język": language_display,
+            "Kategoria": categories_str,
             "Data premiery": release_date,
             "Seria": series_str,
             "Opis wydania": edition_display,
@@ -145,7 +154,7 @@ def parse_onix_data(xml_content):
             "Liczba stron": pages,
             "ISBN-13": isbn13,
             "Cena": price_str,
-            "Opis": description,  # Pobiera całość bez skracania
+            "Opis": description,
             "Link do okładki": cover_url
         }
     except Exception:
@@ -170,7 +179,7 @@ if uploaded_file:
         progress_bar = st.progress(0)
         
         headers = [
-            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Data premiery", "Seria", 
+            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Kategoria", "Data premiery", "Seria", 
             "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
             "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
@@ -203,10 +212,7 @@ if uploaded_file:
         st.success("Dane zostały pobrane!")
 
 if 'results_df' in st.session_state:
-    # W podglądzie Streamlit opisy mogą wyglądać na ucięte, 
-    # ale w pliku Excel będzie cała treść.
     st.dataframe(st.session_state.results_df)
-    
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
