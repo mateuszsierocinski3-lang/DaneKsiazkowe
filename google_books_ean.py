@@ -107,11 +107,12 @@ def parse_onix_data(xml_content):
         pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
         release_date = format_date(pub_date_raw) or "Brak daty"
 
-        # 7. Opis
+        # 7. Opis (USUNIĘTO OGRANICZENIE ZNAKÓW)
         description = "Brak opisu"
         text_content = product.find('.//TextContent[TextType="03"]/Text')
         if text_content is not None:
             raw_html = text_content.text or ""
+            # Usuwanie tagów HTML dla czystego tekstu
             description = re.sub('<[^<]+?>', '', raw_html).strip()
 
         # 8. Okładka
@@ -144,7 +145,7 @@ def parse_onix_data(xml_content):
             "Liczba stron": pages,
             "ISBN-13": isbn13,
             "Cena": price_str,
-            "Opis": description[:500] + "..." if len(description) > 500 else description,
+            "Opis": description,  # Pobiera całość bez skracania
             "Link do okładki": cover_url
         }
     except Exception:
@@ -168,7 +169,6 @@ if uploaded_file:
         final_data = []
         progress_bar = st.progress(0)
         
-        # Zaktualizowana lista nagłówków z Językiem
         headers = [
             "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Data premiery", "Seria", 
             "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
@@ -203,7 +203,10 @@ if uploaded_file:
         st.success("Dane zostały pobrane!")
 
 if 'results_df' in st.session_state:
+    # W podglądzie Streamlit opisy mogą wyglądać na ucięte, 
+    # ale w pliku Excel będzie cała treść.
     st.dataframe(st.session_state.results_df)
+    
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
