@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- SŁOWNIKI MAPOWANIA ---
+# --- SŁOWNIK JĘZYKÓW ---
 LANG_MAP = {
     "pol": "polski",
     "eng": "angielski",
@@ -21,20 +21,6 @@ LANG_MAP = {
     "lat": "łacina",
     "cze": "czeski",
     "ukr": "ukraiński"
-}
-
-# Mapowanie kodów ProductFormDetail z ONIX na polskie nazwy opraw
-FORM_MAP = {
-    "B101": "twarda",
-    "B102": "miękka",
-    "B103": "zintegrowana",
-    "B104": "skórzana",
-    "B105": "kołonotatnik",
-    "B106": "broszurowa",
-    "B111": "twarda z obwolutą",
-    "B112": "miękka ze skrzydełkami",
-    "B201": "spiralna",
-    "A103": "kartonowa"
 }
 
 # --- FUNKCJE POMOCNICZE ---
@@ -73,7 +59,6 @@ def format_date(date_str):
 def parse_onix_data(xml_content):
     try:
         xml_content_str = xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content
-        # Usuwanie namespace dla łatwiejszego wyszukiwania
         xml_content_str = re.sub(r'\sxmlns="[^"]+"', '', xml_content_str, count=1)
         
         root = ET.fromstring(xml_content_str)
@@ -100,24 +85,27 @@ def parse_onix_data(xml_content):
             if s_title: series_names.append(s_title)
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania, strony, język, kategorie i OPRAWA
+        # 5. Opis wydania, strony, język i KATEGORIE oraz OPRAWA
         desc_detail = product.find('DescriptiveDetail')
         edition_display = "Brak"
         pages = "Brak"
         language_display = "Brak"
-        form_display = "Brak danych"
         categories = []
+        oprawa = "Nieznana"
         
         if desc_detail is not None:
-            # Pobieranie informacji o oprawie
-            form_code = find_text(desc_detail, 'ProductFormDetail')
-            form_display = FORM_MAP.get(form_code, "Inna/Nieokreślona")
-            
             ed_stat = find_text(desc_detail, 'EditionStatement')
             if ed_stat:
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
-            
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
+            
+            # --- DODANE: Obsługa rodzaju oprawy ---
+            p_form = find_text(desc_detail, 'ProductForm')
+            p_detail = find_text(desc_detail, 'ProductFormDetail')
+            if p_form == "BC":
+                oprawa = "Miękka ze skrzydełkami" if p_detail == "B504" else "Miękka"
+            elif p_form == "BB":
+                oprawa = "Twarda"
             
             # Język
             lang_node = desc_detail.find('.//Language[LanguageRole="01"]/LanguageCode')
@@ -144,7 +132,7 @@ def parse_onix_data(xml_content):
             raw_html = text_content.text or ""
             description = re.sub('<[^<]+?>', '', raw_html).strip()
 
-        # 8. Link do okładki (grafika)
+        # 8. Okładka (Link)
         cover_url = "Brak okładki"
         res_link = product.find('.//SupportingResource[ResourceContentType="01"]//ResourceLink')
         if res_link is not None: 
@@ -165,9 +153,9 @@ def parse_onix_data(xml_content):
             "Tytuł": title,
             "Autorzy": authors_str,
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
+            "Oprawa": oprawa,
             "Język": language_display,
             "Kategoria": categories_str,
-            "Oprawa": form_display,
             "Data premiery": release_date,
             "Seria": series_str,
             "Opis wydania": edition_display,
@@ -200,11 +188,10 @@ if uploaded_file:
         final_data = []
         progress_bar = st.progress(0)
         
-        # Kolejność kolumn w końcowym raporcie
         headers = [
-            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Kategoria", 
-            "Oprawa", "Data premiery", "Seria", "Opis wydania", "Wydawca", 
-            "Imprint", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"
+            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Kategoria", "Data premiery", "Seria", 
+            "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
+            "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
         for i, row in df_in.iterrows():
@@ -212,6 +199,7 @@ if uploaded_file:
             
             url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
+                # Uwaga: Jeśli nadal masz błąd 401/403, rozważ zamianę na HTTPDigestAuth
                 r = requests.get(url, auth=(elibri_user, elibri_pass), timeout=10)
                 xml_res = r.content if r.status_code == 200 else None
             except:
