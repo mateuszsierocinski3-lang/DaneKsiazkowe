@@ -9,11 +9,11 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- SŁOWNIK JĘZYKÓW ---
+# --- SŁOWNIKI MAPOWANIA ---
 LANG_MAP = {
     "pol": "polski",
     "eng": "angielski",
-    "ger": "nieiecki",
+    "ger": "niemiecki",
     "fre": "francuski",
     "rus": "rosyjski",
     "ita": "włoski",
@@ -21,6 +21,20 @@ LANG_MAP = {
     "lat": "łacina",
     "cze": "czeski",
     "ukr": "ukraiński"
+}
+
+# Mapowanie kodów ProductFormDetail z ONIX na polskie nazwy opraw
+FORM_MAP = {
+    "B101": "twarda",
+    "B102": "miękka",
+    "B103": "zintegrowana",
+    "B104": "skórzana",
+    "B105": "kołonotatnik",
+    "B106": "broszurowa",
+    "B111": "twarda z obwolutą",
+    "B112": "miękka ze skrzydełkami",
+    "B201": "spiralna",
+    "A103": "kartonowa"
 }
 
 # --- FUNKCJE POMOCNICZE ---
@@ -59,6 +73,7 @@ def format_date(date_str):
 def parse_onix_data(xml_content):
     try:
         xml_content_str = xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content
+        # Usuwanie namespace dla łatwiejszego wyszukiwania
         xml_content_str = re.sub(r'\sxmlns="[^"]+"', '', xml_content_str, count=1)
         
         root = ET.fromstring(xml_content_str)
@@ -85,17 +100,23 @@ def parse_onix_data(xml_content):
             if s_title: series_names.append(s_title)
         series_str = ", ".join(series_names) if series_names else "Brak serii"
 
-        # 5. Opis wydania, strony, język i KATEGORIE
+        # 5. Opis wydania, strony, język, kategorie i OPRAWA
         desc_detail = product.find('DescriptiveDetail')
         edition_display = "Brak"
         pages = "Brak"
         language_display = "Brak"
+        form_display = "Brak danych"
         categories = []
         
         if desc_detail is not None:
+            # Pobieranie informacji o oprawie
+            form_code = find_text(desc_detail, 'ProductFormDetail')
+            form_display = FORM_MAP.get(form_code, "Inna/Nieokreślona")
+            
             ed_stat = find_text(desc_detail, 'EditionStatement')
             if ed_stat:
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
+            
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
             
             # Język
@@ -104,7 +125,7 @@ def parse_onix_data(xml_content):
                 l_code = lang_node.text.strip().lower()
                 language_display = LANG_MAP.get(l_code, l_code.upper())
 
-            # Kategorie (Subject) - pobieramy tekst z SubjectHeadingText
+            # Kategorie
             for subject in desc_detail.findall('.//Subject'):
                 cat_text = find_text(subject, 'SubjectHeadingText')
                 if cat_text:
@@ -116,14 +137,14 @@ def parse_onix_data(xml_content):
         pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
         release_date = format_date(pub_date_raw) or "Brak daty"
 
-        # 7. Opis (Pełny, bez limitów)
+        # 7. Opis
         description = "Brak opisu"
         text_content = product.find('.//TextContent[TextType="03"]/Text')
         if text_content is not None:
             raw_html = text_content.text or ""
             description = re.sub('<[^<]+?>', '', raw_html).strip()
 
-        # 8. Okładka
+        # 8. Link do okładki (grafika)
         cover_url = "Brak okładki"
         res_link = product.find('.//SupportingResource[ResourceContentType="01"]//ResourceLink')
         if res_link is not None: 
@@ -146,6 +167,7 @@ def parse_onix_data(xml_content):
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
             "Język": language_display,
             "Kategoria": categories_str,
+            "Oprawa": form_display,
             "Data premiery": release_date,
             "Seria": series_str,
             "Opis wydania": edition_display,
@@ -178,10 +200,11 @@ if uploaded_file:
         final_data = []
         progress_bar = st.progress(0)
         
+        # Kolejność kolumn w końcowym raporcie
         headers = [
-            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Kategoria", "Data premiery", "Seria", 
-            "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
-            "ISBN-13", "Cena", "Opis", "Link do okładki"
+            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Język", "Kategoria", 
+            "Oprawa", "Data premiery", "Seria", "Opis wydania", "Wydawca", 
+            "Imprint", "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
         for i, row in df_in.iterrows():
