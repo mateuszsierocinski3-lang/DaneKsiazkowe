@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import requests
 import time
@@ -9,35 +10,54 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
+# --- GOOGLE ANALYTICS FUNCTIONS ---
+def inject_ga(tag_id):
+    ga_code = f"""
+        <script async src="https://www.googletagmanager.com/gtag/js?id={tag_id}"></script>
+        <script>
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){{dataLayer.push(arguments);}}
+            gtag('js', new Date());
+            gtag('config', '{tag_id}');
+        </script>
+    """
+    components.html(ga_code, height=0)
+
+def track_event(category, action, label):
+    js_event = f"""
+        <script>
+            window.parent.gtag('event', '{action}', {{
+                'event_category': '{category}',
+                'event_label': '{label}'
+            }});
+        </script>
+    """
+    components.html(js_event, height=0)
+
+# Inicjalizacja GA (Zmień G-XXXXXXXXXX na swój ID)
+inject_ga("G-EYLDFL816H")
+
 # --- SŁOWNIK JĘZYKÓW ---
 LANG_MAP = {
-    "pol": "polski",
-    "eng": "angielski",
-    "ger": "niemiecki",
-    "fre": "francuski",
-    "rus": "rosyjski",
-    "ita": "włoski",
-    "spa": "hiszpański",
-    "lat": "łacina",
-    "cze": "czeski",
-    "ukr": "ukraiński"
+    "pol": "polski", "eng": "angielski", "ger": "niemiecki",
+    "fre": "francuski", "rus": "rosyjski", "ita": "włoski",
+    "spa": "hiszpański", "lat": "łacina", "cze": "czeski", "ukr": "ukraiński"
 }
 
 # --- POBIERANIE POŚWIADCZEŃ Z SECRETS ---
-# Dane pobierane bezpośrednio z konfiguracji Streamlit Cloud lub pliku .streamlit/secrets.toml
-ELIBRI_USER = st.secrets["elibri"]["username"]
-ELIBRI_PASS = st.secrets["elibri"]["password"]
+try:
+    ELIBRI_USER = st.secrets["elibri"]["username"]
+    ELIBRI_PASS = st.secrets["elibri"]["password"]
+except KeyError:
+    st.error("❌ Brakuje konfiguracji Secrets! Dodaj 'elibri.username' i 'elibri.password' w ustawieniach Streamlit.")
+    st.stop()
 
 # --- FUNKCJE POMOCNICZE ---
-
 def reverse_authors(authors_str):
-    """Zamienia 'Imię Nazwisko' na 'Nazwisko Imię' dla każdego autora na liście."""
     if not authors_str or authors_str in ["Nieznany", "Brak", "Błąd danych"]:
         return authors_str
-    
     parts = authors_str.split(",") 
     reversed_parts = []
-    
     for part in parts:
         name_atoms = part.strip().split()
         if len(name_atoms) >= 2:
@@ -46,16 +66,13 @@ def reverse_authors(authors_str):
             reversed_parts.append(f"{last_name} {first_names}")
         else:
             reversed_parts.append(part.strip())
-            
     return ", ".join(reversed_parts)
 
 def find_text(parent, path):
-    """Bezpieczne pobieranie tekstu z węzła XML."""
     node = parent.find(path)
     return node.text.strip() if node is not None and node.text else None
 
 def format_date(date_str):
-    """Formatuje datę z YYYYMMDD na YYYY-MM-DD."""
     if date_str and len(date_str) >= 8 and date_str.isdigit():
         return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
     return date_str
@@ -65,45 +82,23 @@ def parse_onix_data(xml_content):
     try:
         xml_content_str = xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content
         xml_content_str = re.sub(r'\sxmlns="[^"]+"', '', xml_content_str, count=1)
-        
         root = ET.fromstring(xml_content_str)
         product = root if root.tag == 'Product' else root.find('.//Product')
         if product is None: return None
 
-        # 1. Identyfikatory
         isbn13 = find_text(product, './/ProductIdentifier[ProductIDType="15"]/IDValue') or "Brak"
-
-        # 2. Tytuł
         title = find_text(product, './/TitleDetail[TitleType="01"]//TitleText') or "Brak tytułu"
-
-        # 3. Autorzy
+        
         authors = []
         for contrib in product.findall('.//Contributor'):
             name = find_text(contrib, 'PersonName')
             if name: authors.append(name)
         authors_str = ", ".join(authors) if authors else "Nieznany"
 
-        # 4. Seria Wydawnicza
-        series_names = []
-        for series in product.findall('.//Collection'):
-            s_title = find_text(series, './/TitleText')
-            if s_title: series_names.append(s_title)
-        series_str = ", ".join(series_names) if series_names else "Brak serii"
-
-        # 5. Opis wydania, strony, język i KATEGORIE oraz OPRAWA
         desc_detail = product.find('DescriptiveDetail')
-        edition_display = "Brak"
-        pages = "Brak"
-        language_display = "Brak"
-        categories = []
         oprawa = "Nieznana"
-        
+        language_display = "Brak"
         if desc_detail is not None:
-            ed_stat = find_text(desc_detail, 'EditionStatement')
-            if ed_stat:
-                edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
-            pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
-            
             p_form = find_text(desc_detail, 'ProductForm')
             p_detail = find_text(desc_detail, 'ProductFormDetail')
             if p_form == "BC":
@@ -116,40 +111,7 @@ def parse_onix_data(xml_content):
                 l_code = lang_node.text.strip().lower()
                 language_display = LANG_MAP.get(l_code, l_code.upper())
 
-            for subject in desc_detail.findall('.//Subject'):
-                cat_text = find_text(subject, 'SubjectHeadingText')
-                if cat_text:
-                    categories.append(cat_text)
-        
-        categories_str = " | ".join(list(dict.fromkeys(categories))) if categories else "Brak kategorii"
-
-        # 6. Data Premiery
-        pub_date_raw = find_text(product, './/PublishingDate[PublishingDateRole="01"]/Date')
-        release_date = format_date(pub_date_raw) or "Brak daty"
-
-        # 7. Opis
-        description = "Brak opisu"
-        text_content = product.find('.//TextContent[TextType="03"]/Text')
-        if text_content is not None:
-            raw_html = text_content.text or ""
-            description = re.sub('<[^<]+?>', '', raw_html).strip()
-
-        # 8. Okładka (Link)
-        cover_url = "Brak okładki"
-        res_link = product.find('.//SupportingResource[ResourceContentType="01"]//ResourceLink')
-        if res_link is not None: 
-            cover_url = res_link.text
-
-        # 9. Wydawca i Cena
         publisher = find_text(product, './/Publisher/PublisherName') or "Brak"
-        imprint = find_text(product, './/Imprint/ImprintName') or "Brak"
-        
-        price_node = product.find('.//Price[PriceType="02"]')
-        price_str = "Brak"
-        if price_node is not None:
-            amt = find_text(price_node, 'PriceAmount')
-            cur = find_text(price_node, 'CurrencyCode')
-            price_str = f"{amt} {cur}"
 
         return {
             "Tytuł": title,
@@ -157,24 +119,15 @@ def parse_onix_data(xml_content):
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
             "Oprawa": oprawa,
             "Język": language_display,
-            "Kategoria": categories_str,
-            "Data premiery": release_date,
-            "Seria": series_str,
-            "Opis wydania": edition_display,
             "Wydawca": publisher,
-            "Imprint": imprint,
-            "Liczba stron": pages,
-            "ISBN-13": isbn13,
-            "Cena": price_str,
-            "Opis": description,
-            "Link do okładki": cover_url
+            "ISBN-13": isbn13
         }
     except Exception:
         return None
 
 # --- UI STREAMLIT ---
 st.title("📖 Bibliotekarz ONIX (eLibri)")
-st.info("Autoryzacja API odbywa się automatycznie za pomocą bezpiecznych kluczy systemowych.")
+st.info("Autoryzacja API odbywa się automatycznie. Twoja aktywność jest monitorowana przez GA.")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
 
@@ -183,35 +136,27 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
+        # TRACK EVENT: Użytkownik rozpoczął pobieranie
+        track_event("UserActivity", "ClickFetch", f"Rows: {len(df_in)}")
+        
         final_data = []
         progress_bar = st.progress(0)
         
-        headers = [
-            "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Kategoria", "Data premiery", "Seria", 
-            "Opis wydania", "Wydawca", "Imprint", "Liczba stron", 
-            "ISBN-13", "Cena", "Opis", "Link do okładki"
-        ]
+        headers = ["Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Wydawca", "ISBN-13"]
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
-            
             url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
-                # Używamy zmiennych pobranych ze st.secrets
                 r = requests.get(url, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
                 xml_res = r.content if r.status_code == 200 else None
             except:
                 xml_res = None
             
             book_info = parse_onix_data(xml_res) if xml_res else None
-            
             entry = {"Identyfikator": isbn_raw}
-            if book_info:
-                for h in headers:
-                    entry[h] = book_info.get(h, "Brak")
-            else:
-                for h in headers:
-                    entry[h] = "Błąd / Nie znaleziono"
+            for h in headers:
+                entry[h] = book_info.get(h, "Błąd/Brak") if book_info else "Nie znaleziono"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
@@ -225,4 +170,7 @@ if 'results_df' in st.session_state:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx")
+    
+    if st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx"):
+        # TRACK EVENT: Użytkownik pobrał wynikowy plik
+        track_event("UserActivity", "DownloadExcel", "Success")
