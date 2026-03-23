@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import requests
 import time
@@ -10,40 +9,42 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- BEZPOŚREDNIE WSTRZYKNIĘCIE TAGU GOOGLE ---
-# To jest dokładnie ten kod, o który prosiłeś, z dodatkiem window.parent dla Streamlita
-ga_tag = """
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-EYLDFL816H"></script>
-<script>
-  window.parent.dataLayer = window.parent.dataLayer || [];
-  function gtag(){window.parent.dataLayer.push(arguments);}
-  gtag('js', new Date());
-
-  gtag('config', 'G-EYLDFL816H');
-</script>
-"""
-components.html(ga_tag, height=0)
+# --- GOOGLE ANALYTICS (Bezpośrednie wstrzyknięcie) ---
+# Używamy st.markdown, aby skrypt był bliżej głównego dokumentu HTML
+st.markdown(
+    """
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-EYLDFL816H"></script>
+    <script>
+      window.parent.dataLayer = window.parent.dataLayer || [];
+      function gtag(){window.parent.dataLayer.push(arguments);}
+      gtag('js', new Date());
+      gtag('config', 'G-EYLDFL816H');
+    </script>
+    """,
+    unsafe_allow_html=True
+)
 
 # --- FUNKCJA DO ŚLEDZENIA ZDARZEŃ ---
 def track_event(category, action, label):
-    """Wysyła zdarzenie do GA4 przy interakcji."""
+    """Wysyła zdarzenie do GA4 przy interakcji użytkownika."""
     js_event = f"""
         <script>
-            window.parent.gtag('event', '{action}', {{
-                'event_category': '{category}',
-                'event_label': '{label}'
-            }});
+            if(window.parent.gtag){{
+                window.parent.gtag('event', '{action}', {{
+                    'event_category': '{category}',
+                    'event_label': '{label}'
+                }});
+            }}
         </script>
     """
-    components.html(js_event, height=0)
+    st.components.v1.html(js_event, height=0)
 
 # --- POBIERANIE POŚWIADCZEŃ Z SECRETS ---
 try:
-    # Wykorzystanie st.secrets chroni klucze przed pokazaniem ich w kodzie
     ELIBRI_USER = st.secrets["elibri"]["username"]
     ELIBRI_PASS = st.secrets["elibri"]["password"]
 except KeyError:
-    st.error("❌ Błąd: Nie znaleziono kluczy API w sekcji Secrets!")
+    st.error("❌ Błąd: Nie znaleziono kluczy API eLibri w sekcji Secrets!")
     st.stop()
 
 # --- SŁOWNIK JĘZYKÓW ---
@@ -115,18 +116,13 @@ def parse_onix_data(xml_content):
         publisher = find_text(product, './/Publisher/PublisherName') or "Brak"
 
         return {
-            "Tytuł": title,
-            "Autorzy": authors_str,
-            "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
-            "Oprawa": oprawa,
-            "Język": language_display,
-            "Wydawca": publisher,
-            "ISBN-13": isbn13
+            "Tytuł": title, "Autorzy": authors_str, "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
+            "Oprawa": oprawa, "Język": language_display, "Wydawca": publisher, "ISBN-13": isbn13
         }
     except Exception:
         return None
 
-# --- UI STREAMLIT ---
+# --- INTERFEJS UŻYTKOWNIKA ---
 st.title("📖 Bibliotekarz ONIX (eLibri)")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
@@ -136,17 +132,17 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        track_event("App", "Start_Process", f"Rows: {len(df_in)}")
+        # Rejestracja zdarzenia rozpoczęcia w GA4
+        track_event("AppAction", "API_Fetch", f"Rows: {len(df_in)}")
+        
         final_data = []
         progress_bar = st.progress(0)
-        
         headers = ["Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Wydawca", "ISBN-13"]
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
-                # Logowanie z użyciem ELIBRI_USER i ELIBRI_PASS z sekcji Secrets
                 r = requests.get(url, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
                 xml_res = r.content if r.status_code == 200 else None
             except:
@@ -171,4 +167,5 @@ if 'results_df' in st.session_state:
         st.session_state.results_df.to_excel(writer, index=False)
     
     if st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx"):
-        track_event("App", "Download", "Excel")
+        # Rejestracja pobrania pliku w GA4
+        track_event("AppAction", "File_Download", "Excel")
