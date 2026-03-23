@@ -23,6 +23,11 @@ LANG_MAP = {
     "ukr": "ukraiński"
 }
 
+# --- POBIERANIE POŚWIADCZEŃ Z SECRETS ---
+# Dane pobierane bezpośrednio z konfiguracji Streamlit Cloud lub pliku .streamlit/secrets.toml
+ELIBRI_USER = st.secrets["elibri"]["username"]
+ELIBRI_PASS = st.secrets["elibri"]["password"]
+
 # --- FUNKCJE POMOCNICZE ---
 
 def reverse_authors(authors_str):
@@ -99,7 +104,6 @@ def parse_onix_data(xml_content):
                 edition_display = "Pierwsze" if ed_stat == "1" else ed_stat
             pages = find_text(desc_detail, './/Extent[ExtentType="00"]/ExtentValue')
             
-            # --- DODANE: Obsługa rodzaju oprawy ---
             p_form = find_text(desc_detail, 'ProductForm')
             p_detail = find_text(desc_detail, 'ProductFormDetail')
             if p_form == "BC":
@@ -107,13 +111,11 @@ def parse_onix_data(xml_content):
             elif p_form == "BB":
                 oprawa = "Twarda"
             
-            # Język
             lang_node = desc_detail.find('.//Language[LanguageRole="01"]/LanguageCode')
             if lang_node is not None:
                 l_code = lang_node.text.strip().lower()
                 language_display = LANG_MAP.get(l_code, l_code.upper())
 
-            # Kategorie
             for subject in desc_detail.findall('.//Subject'):
                 cat_text = find_text(subject, 'SubjectHeadingText')
                 if cat_text:
@@ -171,12 +173,8 @@ def parse_onix_data(xml_content):
         return None
 
 # --- UI STREAMLIT ---
-with st.sidebar:
-    st.header("🔑 Autoryzacja eLibri")
-    elibri_user = st.text_input("Username (API)", value="empik")
-    elibri_pass = st.text_input("Password (API)", type="password", value="sjdhg235!S")
-
 st.title("📖 Bibliotekarz ONIX (eLibri)")
+st.info("Autoryzacja API odbywa się automatycznie za pomocą bezpiecznych kluczy systemowych.")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
 
@@ -199,8 +197,8 @@ if uploaded_file:
             
             url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
-                # Uwaga: Jeśli nadal masz błąd 401/403, rozważ zamianę na HTTPDigestAuth
-                r = requests.get(url, auth=(elibri_user, elibri_pass), timeout=10)
+                # Używamy zmiennych pobranych ze st.secrets
+                r = requests.get(url, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
                 xml_res = r.content if r.status_code == 200 else None
             except:
                 xml_res = None
