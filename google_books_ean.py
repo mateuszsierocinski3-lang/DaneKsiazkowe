@@ -10,36 +10,39 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- GOOGLE ANALYTICS (Tag Google) ---
+# --- GOOGLE ANALYTICS (Wersja z poprawionym zasięgiem) ---
 def inject_ga(tag_id):
-    # Tag Google (gtag.js) wklejany bezpośrednio po <head> (w Streamlit realizowane przez components)
+    """Wstrzykuje kod Google Analytics z dostępem do okna nadrzędnego."""
     ga_code = f"""
         <script async src="https://www.googletagmanager.com/gtag/js?id={tag_id}"></script>
         <script>
-          window.dataLayer = window.dataLayer || [];
-          function gtag(){{dataLayer.push(arguments);}}
-          gtag('js', new Date());
-
-          gtag('config', '{tag_id}');
+            window.parent.dataLayer = window.parent.dataLayer || [];
+            function gtag(){{window.parent.dataLayer.push(arguments);}}
+            gtag('js', new Date());
+            gtag('config', '{tag_id}');
         </script>
     """
-    # Wstrzyknięcie kodu na stronę
+    # Renderowanie komponentu HTML o wysokości 0, aby był niewidoczny
     components.html(ga_code, height=0)
 
 def track_event(category, action, label):
-    """Funkcja do śledzenia dodatkowych zdarzeń (np. kliknięć)"""
+    """Funkcja do śledzenia niestandardowych zdarzeń w GA4."""
     js_event = f"""
         <script>
-            window.parent.gtag('event', '{action}', {{
-                'event_category': '{category}',
-                'event_label': '{label}'
-            }});
+            if(window.parent.gtag) {{
+                window.parent.gtag('event', '{action}', {{
+                    'event_category': '{category}',
+                    'event_label': '{label}'
+                }});
+            }}
         </script>
     """
     components.html(js_event, height=0)
 
-# Inicjalizacja śledzenia - TUTAJ WPISZ SWÓJ KOD G-XXXXXXXX
-inject_ga("G-EYLDFL816H")
+# --- INICJALIZACJA ANALITYKI ---
+# Zmień poniższy ID na swój właściwy kod pomiaru
+MY_GA_ID = "G-EYLDFL816H" 
+inject_ga(MY_GA_ID)
 
 # --- SŁOWNIK JĘZYKÓW ---
 LANG_MAP = {
@@ -50,6 +53,7 @@ LANG_MAP = {
 
 # --- POBIERANIE POŚWIADCZEŃ Z SECRETS ---
 try:
+    # Klucze pobierane z bezpiecznej sekcji Secrets w Streamlit Cloud
     ELIBRI_USER = st.secrets["elibri"]["username"]
     ELIBRI_PASS = st.secrets["elibri"]["password"]
 except KeyError:
@@ -131,7 +135,7 @@ def parse_onix_data(xml_content):
 
 # --- UI STREAMLIT ---
 st.title("📖 Bibliotekarz ONIX (eLibri)")
-st.info("Aplikacja korzysta z Google Tag Manager do analityki.")
+st.info("Aplikacja korzysta z Google Analytics do monitorowania ruchu.")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
 
@@ -140,8 +144,8 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        # Rejestracja zdarzenia rozpoczęcia pracy w GA
-        track_event("UX", "API_Fetch_Start", f"Rows_{len(df_in)}")
+        # Rejestracja zdarzenia w GA4
+        track_event("UserEngagement", "API_Request", f"Items_{len(df_in)}")
         
         final_data = []
         progress_bar = st.progress(0)
@@ -152,6 +156,7 @@ if uploaded_file:
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
+                # Autoryzacja pobierana z bezpiecznych zmiennych
                 r = requests.get(url, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
                 xml_res = r.content if r.status_code == 200 else None
             except:
@@ -176,5 +181,5 @@ if 'results_df' in st.session_state:
         st.session_state.results_df.to_excel(writer, index=False)
     
     if st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx"):
-        # Rejestracja zdarzenia pobrania pliku w GA
-        track_event("UX", "File_Download", "Excel_Results")
+        # Śledzenie pobrania pliku
+        track_event("UserEngagement", "File_Download", "Excel_Success")
