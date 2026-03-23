@@ -4,38 +4,65 @@ import requests
 import time
 import re
 import io
+import json
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- INTEGRACJA GOOGLE ANALYTICS (Rozwiązanie z window.parent) ---
-GA_ID = "G-EYLDFL816H"
+# --- KONFIGURACJA GOOGLE ANALYTICS 4 ---
+GOOGLE_ANALYTICS_ID = "G-EYLDFL816H"
 
-st.markdown(
-    f"""
-    <script async src="https://www.googletagmanager.com/gtag/js?id={GA_ID}"></script>
-    <script>
-      window.parent.dataLayer = window.parent.dataLayer || [];
-      function gtag(){{window.parent.dataLayer.push(arguments);}}
-      gtag('js', new Date());
-      gtag('config', '{GA_ID}');
-    </script>
-    """,
-    unsafe_allow_html=True
-)
-
-def track_ga_event(action, label):
-    js_code = f"""
-        <script>
-            if(window.parent.gtag){{
-                window.parent.gtag('event', '{action}', {{
-                    'event_label': '{label}'
-                }});
-            }}
-        </script>
+def inject_ga(ga_id):
     """
-    st.components.v1.html(js_code, height=0)
+    Wstrzykuje bibliotekę GA4 do głównego okna przeglądarki (window.parent).
+    Uruchamia się tylko raz, sprawdzając czy skrypt już istnieje.
+    """
+    if ga_id.startswith("G-XXXX"): return 
+    
+    js = f"""
+    <script>
+    var parentHead = window.parent.document.head;
+    if (!parentHead.querySelector('script[src*="gtag/js?id={ga_id}"]')) {{
+        console.log('Injecting GA4 into parent window...');
+        var script = window.parent.document.createElement('script');
+        script.async = true;
+        script.src = 'https://www.googletagmanager.com/gtag/js?id={ga_id}';
+        parentHead.appendChild(script);
+
+        var script2 = window.parent.document.createElement('script');
+        script2.innerHTML = `
+            window.parent.dataLayer = window.parent.dataLayer || [];
+            function gtag(){{window.parent.dataLayer.push(arguments);}}
+            gtag('js', new Date());
+            gtag('config', '{ga_id}');
+        `;
+        parentHead.appendChild(script2);
+    }}
+    </script>
+    """
+    st.components.v1.html(js, height=0, width=0)
+
+def track_event(event_name, params=None):
+    """
+    Wysyła zdarzenie do GA4 znajdującego się w oknie rodzica.
+    """
+    if params is None: params = {}
+    params_json = json.dumps(params)
+    js = f"""
+    <script>
+    if (window.parent.gtag) {{
+        window.parent.gtag('event', '{event_name}', {params_json});
+        console.log('Event sent to parent GA:', '{event_name}');
+    }} else {{
+        console.warn('Parent GA not found. Event missed:', '{event_name}');
+    }}
+    </script>
+    """
+    st.components.v1.html(js, height=0, width=0)
+
+# Inicjalizacja GA4 na początku aplikacji
+inject_ga(GOOGLE_ANALYTICS_ID)
 
 # --- POBIERANIE POŚWIADCZEŃ Z SECRETS ---
 try:
@@ -45,7 +72,7 @@ except Exception:
     st.error("❌ Brak konfiguracji Secrets (elibri.username / elibri.password)")
     st.stop()
 
-# --- SŁOWNIK JĘZYKÓW (Poprawiona składnia) ---
+# --- SŁOWNIK JĘZYKÓW ---
 LANG_MAP = {
     "pol": "polski", "eng": "angielski", "ger": "niemiecki",
     "fre": "francuski", "rus": "rosyjski", "ita": "włoski",
@@ -109,18 +136,13 @@ def parse_onix_data(xml_content):
         publisher = find_text(product, './/Publisher/PublisherName') or "Brak"
 
         return {
-            "Tytuł": title,
-            "Autorzy": authors_str,
-            "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
-            "Oprawa": oprawa,
-            "Język": language_display,
-            "Wydawca": publisher,
-            "ISBN-13": isbn13
+            "Tytuł": title, "Autorzy": authors_str, "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
+            "Oprawa": oprawa, "Język": language_display, "Wydawca": publisher, "ISBN-13": isbn13
         }
     except Exception:
         return None
 
-# --- UI ---
+# --- INTERFEJS UŻYTKOWNIKA ---
 st.title("📖 Bibliotekarz ONIX (eLibri)")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
@@ -130,7 +152,9 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        track_ga_event("api_fetch_start", f"Rows: {len(df_in)}")
+        # Śledzenie zdarzenia rozpoczęcia
+        track_event("api_request_start", {"rows_count": len(df_in)})
+        
         final_data = []
         progress_bar = st.progress(0)
         headers = ["Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Wydawca", "ISBN-13"]
@@ -155,10 +179,16 @@ if uploaded_file:
 
         st.session_state.results_df = pd.DataFrame(final_data)
         st.success("Dane zostały pobrane!")
+        
+        # Śledzenie sukcesu
+        track_event("api_request_success", {"processed_items": len(final_data)})
 
 if 'results_df' in st.session_state:
     st.dataframe(st.session_state.results_df)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx")
+    
+    if st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx"):
+        # Śledzenie pobrania pliku
+        track_event("file_download", {"format": "xlsx"})
