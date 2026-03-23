@@ -10,20 +10,24 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
-# --- GOOGLE ANALYTICS FUNCTIONS ---
+# --- GOOGLE ANALYTICS (Tag Google) ---
 def inject_ga(tag_id):
+    # Tag Google (gtag.js) wklejany bezpośrednio po <head> (w Streamlit realizowane przez components)
     ga_code = f"""
         <script async src="https://www.googletagmanager.com/gtag/js?id={tag_id}"></script>
         <script>
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){{dataLayer.push(arguments);}}
-            gtag('js', new Date());
-            gtag('config', '{tag_id}');
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){{dataLayer.push(arguments);}}
+          gtag('js', new Date());
+
+          gtag('config', '{tag_id}');
         </script>
     """
+    # Wstrzyknięcie kodu na stronę
     components.html(ga_code, height=0)
 
 def track_event(category, action, label):
+    """Funkcja do śledzenia dodatkowych zdarzeń (np. kliknięć)"""
     js_event = f"""
         <script>
             window.parent.gtag('event', '{action}', {{
@@ -34,7 +38,7 @@ def track_event(category, action, label):
     """
     components.html(js_event, height=0)
 
-# Inicjalizacja GA (Zmień G-XXXXXXXXXX na swój ID)
+# Inicjalizacja śledzenia - TUTAJ WPISZ SWÓJ KOD G-XXXXXXXX
 inject_ga("G-EYLDFL816H")
 
 # --- SŁOWNIK JĘZYKÓW ---
@@ -127,7 +131,7 @@ def parse_onix_data(xml_content):
 
 # --- UI STREAMLIT ---
 st.title("📖 Bibliotekarz ONIX (eLibri)")
-st.info("Autoryzacja API odbywa się automatycznie. Twoja aktywność jest monitorowana przez GA.")
+st.info("Aplikacja korzysta z Google Tag Manager do analityki.")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
 
@@ -136,8 +140,8 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        # TRACK EVENT: Użytkownik rozpoczął pobieranie
-        track_event("UserActivity", "ClickFetch", f"Rows: {len(df_in)}")
+        # Rejestracja zdarzenia rozpoczęcia pracy w GA
+        track_event("UX", "API_Fetch_Start", f"Rows_{len(df_in)}")
         
         final_data = []
         progress_bar = st.progress(0)
@@ -172,5 +176,5 @@ if 'results_df' in st.session_state:
         st.session_state.results_df.to_excel(writer, index=False)
     
     if st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx"):
-        # TRACK EVENT: Użytkownik pobrał wynikowy plik
-        track_event("UserActivity", "DownloadExcel", "Success")
+        # Rejestracja zdarzenia pobrania pliku w GA
+        track_event("UX", "File_Download", "Excel_Results")
