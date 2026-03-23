@@ -10,7 +10,6 @@ import xml.etree.ElementTree as ET
 st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
 
 # --- INTEGRACJA GOOGLE ANALYTICS (Rozwiązanie z window.parent) ---
-# Zamień 'G-EYLDFL816H' na swój właściwy identyfikator, jeśli jest inny
 GA_ID = "G-EYLDFL816H"
 
 st.markdown(
@@ -26,13 +25,14 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-# Funkcja pomocnicza do śledzenia zdarzeń (np. pobieranie danych)
 def track_ga_event(action, label):
     js_code = f"""
         <script>
-            window.parent.gtag('event', '{action}', {{
-                'event_label': '{label}'
-            }});
+            if(window.parent.gtag){{
+                window.parent.gtag('event', '{action}', {{
+                    'event_label': '{label}'
+                }});
+            }}
         </script>
     """
     st.components.v1.html(js_code, height=0)
@@ -41,16 +41,16 @@ def track_ga_event(action, label):
 try:
     ELIBRI_USER = st.secrets["elibri"]["username"]
     ELIBRI_PASS = st.secrets["elibri"]["password"]
-except KeyError:
-    st.error("❌ Błąd: Nie znaleziono kluczy API w sekcji Secrets (elibri.username / elibri.password)")
+except Exception:
+    st.error("❌ Brak konfiguracji Secrets (elibri.username / elibri.password)")
     st.stop()
 
-# --- SŁOWNIK JĘZYKÓW ---
-LANG_MAP = {{
+# --- SŁOWNIK JĘZYKÓW (Poprawiona składnia) ---
+LANG_MAP = {
     "pol": "polski", "eng": "angielski", "ger": "niemiecki",
     "fre": "francuski", "rus": "rosyjski", "ita": "włoski",
     "spa": "hiszpański", "lat": "łacina", "cze": "czeski", "ukr": "ukraiński"
-}}
+}
 
 # --- FUNKCJE POMOCNICZE ---
 def reverse_authors(authors_str):
@@ -63,7 +63,7 @@ def reverse_authors(authors_str):
         if len(name_atoms) >= 2:
             last_name = name_atoms[-1]
             first_names = " ".join(name_atoms[:-1])
-            reversed_parts.append(f"{{last_name}} {{first_names}}")
+            reversed_parts.append(f"{last_name} {first_names}")
         else:
             reversed_parts.append(part.strip())
     return ", ".join(reversed_parts)
@@ -71,11 +71,6 @@ def reverse_authors(authors_str):
 def find_text(parent, path):
     node = parent.find(path)
     return node.text.strip() if node is not None and node.text else None
-
-def format_date(date_str):
-    if date_str and len(date_str) >= 8 and date_str.isdigit():
-        return f"{{date_str[:4]}}-{{date_str[4:6]}}-{{date_str[6:8]}}"
-    return date_str
 
 # --- PARSER ONIX ---
 def parse_onix_data(xml_content):
@@ -113,7 +108,7 @@ def parse_onix_data(xml_content):
 
         publisher = find_text(product, './/Publisher/PublisherName') or "Brak"
 
-        return {{
+        return {
             "Tytuł": title,
             "Autorzy": authors_str,
             "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
@@ -121,11 +116,11 @@ def parse_onix_data(xml_content):
             "Język": language_display,
             "Wydawca": publisher,
             "ISBN-13": isbn13
-        }}
+        }
     except Exception:
         return None
 
-# --- UI STREAMLIT ---
+# --- UI ---
 st.title("📖 Bibliotekarz ONIX (eLibri)")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
@@ -135,16 +130,14 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        # Śledzenie rozpoczęcia pobierania w GA
-        track_ga_event("api_fetch_start", f"Rows: {{len(df_in)}}")
-        
+        track_ga_event("api_fetch_start", f"Rows: {len(df_in)}")
         final_data = []
         progress_bar = st.progress(0)
         headers = ["Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Wydawca", "ISBN-13"]
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
-            url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{{isbn_raw}}"
+            url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
             try:
                 r = requests.get(url, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
                 xml_res = r.content if r.status_code == 200 else None
@@ -152,7 +145,7 @@ if uploaded_file:
                 xml_res = None
             
             book_info = parse_onix_data(xml_res) if xml_res else None
-            entry = {{"Identyfikator": isbn_raw}}
+            entry = {"Identyfikator": isbn_raw}
             for h in headers:
                 entry[h] = book_info.get(h, "Błąd/Brak") if book_info else "Nie znaleziono"
             
@@ -168,7 +161,4 @@ if 'results_df' in st.session_state:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    
-    if st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx"):
-        # Śledzenie pobrania pliku w GA
-        track_ga_event("file_download", "rejestr_elibri.xlsx")
+    st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx")
