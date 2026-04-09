@@ -8,7 +8,7 @@ import json
 import xml.etree.ElementTree as ET
 
 # --- KONFIGURACJA STRONY ---
-st.set_page_config(page_title="Bibliotekarz Pro", page_icon="📖", layout="wide")
+st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="wide")
 
 # --- INTEGRACJA GOOGLE ANALYTICS 4 ---
 GOOGLE_ANALYTICS_ID = "G-EYLDFL816H"
@@ -48,6 +48,7 @@ def track_event(event_name, params=None):
     """
     st.components.v1.html(js, height=0, width=0)
 
+# Inicjalizacja GA
 inject_ga(GOOGLE_ANALYTICS_ID)
 
 # --- SŁOWNIK JĘZYKÓW ---
@@ -57,7 +58,7 @@ LANG_MAP = {
     "spa": "hiszpański", "lat": "łacina", "cze": "czeski", "ukr": "ukraiński"
 }
 
-# --- POBIERANIE POŚWIADCZEŃ Z SECRETS ---
+# --- POŚWIADCZENIA ---
 try:
     ELIBRI_USER = st.secrets["elibri"]["username"]
     ELIBRI_PASS = st.secrets["elibri"]["password"]
@@ -89,7 +90,7 @@ def format_date(date_str):
         return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
     return date_str
 
-# --- PARSER ONIX ---
+# --- PARSER ONIX (ELIBRI) ---
 def parse_onix_data(xml_content):
     try:
         xml_content_str = xml_content.decode('utf-8') if isinstance(xml_content, bytes) else xml_content
@@ -161,8 +162,56 @@ def parse_onix_data(xml_content):
         }
     except Exception: return None
 
+# --- OBSŁUGA OPEN LIBRARY ---
+def fetch_open_library(isbn):
+    try:
+        url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            key = f"ISBN:{isbn}"
+            if key in data:
+                b = data[key]
+                authors = [a.get('name') for a in b.get('authors', [])]
+                authors_str = ", ".join(authors) if authors else "Nieznany"
+                return {
+                    "Tytuł": b.get('title', "Brak tytułu"),
+                    "Autorzy": authors_str,
+                    "Autorzy (Nazwisko Imię)": reverse_authors(authors_str),
+                    "Oprawa": "Brak danych (OL)",
+                    "Język": "Brak danych (OL)",
+                    "Kategoria": " | ".join([s.get('name') for s in b.get('subjects', [])[:3]]) if b.get('subjects') else "Brak",
+                    "Data premiery": b.get('publish_date', "Brak daty"),
+                    "Seria": "Brak danych (OL)",
+                    "Opis wydania": "Brak danych (OL)",
+                    "Wydawca": ", ".join([p.get('name') for p in b.get('publishers', [])]) if b.get('publishers') else "Brak",
+                    "Imprint": "Brak",
+                    "Liczba stron": str(b.get('number_of_pages', "Brak")),
+                    "ISBN-13": isbn,
+                    "Cena": "Nie dotyczy (OL)",
+                    "Opis": b.get('notes', "Brak opisu"),
+                    "Link do okładki": b.get('cover', {}).get('large', "Brak okładki")
+                }
+        return None
+    except: return None
+
+# --- GŁÓWNA LOGIKA POBIERANIA ---
+def get_book_data(isbn):
+    url_elibri = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn}"
+    try:
+        r = requests.get(url_elibri, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
+        if r.status_code == 200:
+            data = parse_onix_data(r.content)
+            if data: return data, "Baza 1"
+    except: pass
+
+    ol_data = fetch_open_library(isbn)
+    if ol_data:
+        return ol_data, "Baza 2"
+    return None, "Brak"
+
 # --- UI STREAMLIT ---
-st.title("📖 Bibliotekarz ONIX (eLibri)")
+st.title("📖 Bibliotekarz")
 
 uploaded_file = st.file_uploader("Załaduj plik Excel z kolumną ISBN", type=["xlsx"])
 
@@ -171,11 +220,13 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        track_event("api_request_start", {"rows_count": len(df_in)})
+        # EVENT: Start przetwarzania
+        track_event("file_processing_start", {"row_count": len(df_in)})
+        
         final_data = []
         progress_bar = st.progress(0)
+        status_text = st.empty() # Miejsce na tekst statusu
         
-        # Definiujemy wszystkie nagłówki, które CHCEMY widzieć w wynikach
         headers = [
             "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Kategoria", 
             "Data premiery", "Seria", "Opis wydania", "Wydawca", "Imprint", 
@@ -184,34 +235,36 @@ if uploaded_file:
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
-            track_event("isbn_search", {"isbn_number": isbn_raw})
-
-            url = f"https://www.elibri.com.pl/distributors/empik/by_isbn/{isbn_raw}"
-            try:
-                r = requests.get(url, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
-                xml_res = r.content if r.status_code == 200 else None
-            except: xml_res = None
             
-            book_info = parse_onix_data(xml_res) if xml_res else None
-            entry = {"Identyfikator": isbn_raw}
+            # UX: Wyświetlanie aktualnie konwertowanej książki
+            status_text.text(f"📚 Konwertowanie książki: {isbn_raw} ({i+1}/{len(df_in)})")
             
-            # Wypełnianie danych dla każdego nagłówka
+            book_info, source = get_book_data(isbn_raw)
+            entry = {"Identyfikator": isbn_raw, "Źródło danych": source}
+            
             for h in headers:
                 if book_info:
                     entry[h] = book_info.get(h, "Brak")
                 else:
-                    entry[h] = "Nie znaleziono / Błąd"
+                    entry[h] = "Nie znaleziono w żadnej bazie"
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.05)
+            time.sleep(0.1)
 
+        status_text.empty() # Usuwa status po zakończeniu
         st.session_state.results_df = pd.DataFrame(final_data)
-        st.success("Dane zostały pobrane!")
+        st.success("Przetwarzanie zakończone!")
+        
+        # EVENT: Koniec przetwarzania
+        track_event("file_processing_complete", {"processed_count": len(final_data)})
 
 if 'results_df' in st.session_state:
     st.dataframe(st.session_state.results_df)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
-    st.download_button("📥 Pobierz Excel", buf.getvalue(), "rejestr_elibri.xlsx")
+    
+    if st.download_button("📥 Pobierz kompletny Excel", buf.getvalue(), "rejestr_ksiazek.xlsx"):
+        # EVENT: Pobranie pliku
+        track_event("file_download")
