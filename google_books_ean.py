@@ -10,39 +10,22 @@ import xml.etree.ElementTree as ET
 # --- KONFIGURACJA STRONY ---
 st.set_page_config(page_title="Bibliotekarz", page_icon="📖", layout="wide")
 
-# --- INTEGRACJA GOOGLE ANALYTICS 4 ---
-GOOGLE_ANALYTICS_ID = "G-EYLDFL816H"
+# --- INTEGRACJA GOOGLE TAG MANAGER (GTM) ---
+GTM_ID = "GTM-52GRQSL"  # Twój znaleziony tag
 
-def inject_ga(ga_id):
-    if ga_id.startswith("G-XXXX"): return 
-    # Wstrzyknięcie dostarczonego przez Ciebie kodu Google Tag
+def inject_gtm(gtm_id):
+    # Standardowa implementacja GTM dla Streamlit
     js = f"""
-    <script async src="https://www.googletagmanager.com/gtag/js?id={ga_id}"></script>
-    <script>
-      window.dataLayer = window.dataLayer || [];
-      function gtag(){{dataLayer.push(arguments);}}
-      gtag('js', new Date());
-      gtag('config', '{ga_id}');
-    </script>
+    <script>(function(w,d,s,l,i){{w[l]=w[l]||[];w[l].push({{'gtm.start':
+    new Date().getTime(),event:'gtm.js'}});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+    }})(window,document,'script','dataLayer','{gtm_id}');</script>
     """
     st.components.v1.html(js, height=0)
 
-def track_event(event_name, params=None):
-    if params is None: params = {}
-    params_json = json.dumps(params)
-    js = f"""
-    <script>
-        if (window.gtag) {{
-            window.gtag('event', '{event_name}', {params_json});
-        }} else if (window.parent.gtag) {{
-            window.parent.gtag('event', '{event_name}', {params_json});
-        }}
-    </script>
-    """
-    st.components.v1.html(js, height=0)
-
-# Inicjalizacja GA
-inject_ga(GOOGLE_ANALYTICS_ID)
+# Inicjalizacja GTM
+inject_gtm(GTM_ID)
 
 # --- SŁOWNIK JĘZYKÓW ---
 LANG_MAP = {
@@ -213,8 +196,6 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        track_event("file_processing_start", {"row_count": len(df_in)})
-        
         final_data = []
         progress_bar = st.progress(0)
         status_placeholder = st.empty()
@@ -225,15 +206,14 @@ if uploaded_file:
             "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
-        # Animacja z książkami
         book_emojis = ["📖", "📕", "📗", "📘", "📙"]
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             
-            # Wyświetlanie animowanej emotki przy aktualnym ISBN
+            # Animacja i status
             current_emoji = book_emojis[i % len(book_emojis)]
-            status_placeholder.markdown(f"### {current_emoji} Przetwarzanie: **{isbn_raw}** ({i+1}/{len(df_in)})")
+            status_placeholder.markdown(f"### {current_emoji} Konwertowanie: **{isbn_raw}** ({i+1}/{len(df_in)})")
             
             book_info, source = get_book_data(isbn_raw)
             entry = {"Identyfikator": isbn_raw, "Źródło danych": source}
@@ -250,9 +230,7 @@ if uploaded_file:
 
         status_placeholder.empty()
         st.session_state.results_df = pd.DataFrame(final_data)
-        st.success("✨ Przetwarzanie zakończone pomyślnie!")
-        
-        track_event("file_processing_complete", {"processed_count": len(final_data)})
+        st.success("✨ Przetwarzanie zakończone!")
 
 if 'results_df' in st.session_state:
     st.dataframe(st.session_state.results_df)
@@ -260,5 +238,4 @@ if 'results_df' in st.session_state:
     with pd.ExcelWriter(buf, engine='xlsxwriter') as writer:
         st.session_state.results_df.to_excel(writer, index=False)
     
-    if st.download_button("📥 Pobierz kompletny Excel", buf.getvalue(), "rejestr_ksiazek.xlsx"):
-        track_event("file_download")
+    st.download_button("📥 Pobierz kompletny Excel", buf.getvalue(), "rejestr_ksiazek.xlsx")
