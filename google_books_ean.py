@@ -15,16 +15,14 @@ GOOGLE_ANALYTICS_ID = "G-EYLDFL816H"
 
 def inject_ga(ga_id):
     if ga_id.startswith("G-XXXX"): return 
-    # Uproszczona metoda wstrzykiwania bez window.parent dla lepszej wykrywalności tagu
+    # Wstrzyknięcie dostarczonego przez Ciebie kodu Google Tag
     js = f"""
     <script async src="https://www.googletagmanager.com/gtag/js?id={ga_id}"></script>
     <script>
-        window.dataLayer = window.dataLayer || [];
-        function gtag(){{dataLayer.push(arguments);}}
-        gtag('js', new Date());
-        gtag('config', '{ga_id}', {{
-            'send_page_view': true
-        }});
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){{dataLayer.push(arguments);}}
+      gtag('js', new Date());
+      gtag('config', '{ga_id}');
     </script>
     """
     st.components.v1.html(js, height=0)
@@ -227,12 +225,13 @@ if uploaded_file:
             "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
+        # Animacja z książkami
         book_emojis = ["📖", "📕", "📗", "📘", "📙"]
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             
-            # UX: Animacja zmiany emotek podczas przetwarzania
+            # Wyświetlanie animowanej emotki przy aktualnym ISBN
             current_emoji = book_emojis[i % len(book_emojis)]
             status_placeholder.markdown(f"### {current_emoji} Przetwarzanie: **{isbn_raw}** ({i+1}/{len(df_in)})")
             
