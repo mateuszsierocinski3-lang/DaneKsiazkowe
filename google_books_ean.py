@@ -15,38 +15,33 @@ GOOGLE_ANALYTICS_ID = "G-EYLDFL816H"
 
 def inject_ga(ga_id):
     if ga_id.startswith("G-XXXX"): return 
+    # Uproszczona metoda wstrzykiwania bez window.parent dla lepszej wykrywalności tagu
     js = f"""
+    <script async src="https://www.googletagmanager.com/gtag/js?id={ga_id}"></script>
     <script>
-    var parentHead = window.parent.document.head;
-    if (!parentHead.querySelector('script[src*="gtag/js?id={ga_id}"]')) {{
-        var script = window.parent.document.createElement('script');
-        script.async = true;
-        script.src = 'https://www.googletagmanager.com/gtag/js?id={ga_id}';
-        parentHead.appendChild(script);
-        var script2 = window.parent.document.createElement('script');
-        script2.innerHTML = `
-            window.parent.dataLayer = window.parent.dataLayer || [];
-            function gtag(){{window.parent.dataLayer.push(arguments);}}
-            gtag('js', new Date());
-            gtag('config', '{ga_id}');
-        `;
-        parentHead.appendChild(script2);
-    }}
+        window.dataLayer = window.dataLayer || [];
+        function gtag(){{dataLayer.push(arguments);}}
+        gtag('js', new Date());
+        gtag('config', '{ga_id}', {{
+            'send_page_view': true
+        }});
     </script>
     """
-    st.components.v1.html(js, height=0, width=0)
+    st.components.v1.html(js, height=0)
 
 def track_event(event_name, params=None):
     if params is None: params = {}
     params_json = json.dumps(params)
     js = f"""
     <script>
-    if (window.parent.gtag) {{
-        window.parent.gtag('event', '{event_name}', {params_json});
-    }}
+        if (window.gtag) {{
+            window.gtag('event', '{event_name}', {params_json});
+        }} else if (window.parent.gtag) {{
+            window.parent.gtag('event', '{event_name}', {params_json});
+        }}
     </script>
     """
-    st.components.v1.html(js, height=0, width=0)
+    st.components.v1.html(js, height=0)
 
 # Inicjalizacja GA
 inject_ga(GOOGLE_ANALYTICS_ID)
@@ -232,13 +227,12 @@ if uploaded_file:
             "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
-        # Prosta animacja symboli książki
         book_emojis = ["📖", "📕", "📗", "📘", "📙"]
         
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             
-            # Efekt "animacji" poprzez rotację emotek w statusie
+            # UX: Animacja zmiany emotek podczas przetwarzania
             current_emoji = book_emojis[i % len(book_emojis)]
             status_placeholder.markdown(f"### {current_emoji} Przetwarzanie: **{isbn_raw}** ({i+1}/{len(df_in)})")
             
@@ -253,7 +247,7 @@ if uploaded_file:
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.05) # Subtelne opóźnienie dla efektu wizualnego
+            time.sleep(0.05)
 
         status_placeholder.empty()
         st.session_state.results_df = pd.DataFrame(final_data)
