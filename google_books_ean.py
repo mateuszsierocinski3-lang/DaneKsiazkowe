@@ -202,12 +202,12 @@ def get_book_data(isbn):
         r = requests.get(url_elibri, auth=(ELIBRI_USER, ELIBRI_PASS), timeout=10)
         if r.status_code == 200:
             data = parse_onix_data(r.content)
-            if data: return data, "Baza 1"
+            if data: return data, "eLibri"
     except: pass
 
     ol_data = fetch_open_library(isbn)
     if ol_data:
-        return ol_data, "Baza 2"
+        return ol_data, "OpenLibrary"
     return None, "Brak"
 
 # --- UI STREAMLIT ---
@@ -220,12 +220,11 @@ if uploaded_file:
     target_col = st.selectbox("Wybierz kolumnę z numerami ISBN:", df_in.columns)
     
     if st.button("Pobierz dane z API"):
-        # EVENT: Start przetwarzania
         track_event("file_processing_start", {"row_count": len(df_in)})
         
         final_data = []
         progress_bar = st.progress(0)
-        status_text = st.empty() # Miejsce na tekst statusu
+        status_placeholder = st.empty()
         
         headers = [
             "Tytuł", "Autorzy", "Autorzy (Nazwisko Imię)", "Oprawa", "Język", "Kategoria", 
@@ -233,11 +232,15 @@ if uploaded_file:
             "Liczba stron", "ISBN-13", "Cena", "Opis", "Link do okładki"
         ]
         
+        # Prosta animacja symboli książki
+        book_emojis = ["📖", "📕", "📗", "📘", "📙"]
+        
         for i, row in df_in.iterrows():
             isbn_raw = str(row[target_col]).split('.')[0].strip()
             
-            # UX: Wyświetlanie aktualnie konwertowanej książki
-            status_text.text(f"📚 Konwertowanie książki: {isbn_raw} ({i+1}/{len(df_in)})")
+            # Efekt "animacji" poprzez rotację emotek w statusie
+            current_emoji = book_emojis[i % len(book_emojis)]
+            status_placeholder.markdown(f"### {current_emoji} Przetwarzanie: **{isbn_raw}** ({i+1}/{len(df_in)})")
             
             book_info, source = get_book_data(isbn_raw)
             entry = {"Identyfikator": isbn_raw, "Źródło danych": source}
@@ -250,13 +253,12 @@ if uploaded_file:
             
             final_data.append(entry)
             progress_bar.progress((i + 1) / len(df_in))
-            time.sleep(0.1)
+            time.sleep(0.05) # Subtelne opóźnienie dla efektu wizualnego
 
-        status_text.empty() # Usuwa status po zakończeniu
+        status_placeholder.empty()
         st.session_state.results_df = pd.DataFrame(final_data)
-        st.success("Przetwarzanie zakończone!")
+        st.success("✨ Przetwarzanie zakończone pomyślnie!")
         
-        # EVENT: Koniec przetwarzania
         track_event("file_processing_complete", {"processed_count": len(final_data)})
 
 if 'results_df' in st.session_state:
@@ -266,5 +268,4 @@ if 'results_df' in st.session_state:
         st.session_state.results_df.to_excel(writer, index=False)
     
     if st.download_button("📥 Pobierz kompletny Excel", buf.getvalue(), "rejestr_ksiazek.xlsx"):
-        # EVENT: Pobranie pliku
         track_event("file_download")
